@@ -1,4 +1,4 @@
-<p align="center"><img src=".github/logo.png" alt="PandaUI logo" width="160"></p>
+<p align="center"><img src=".github/logo.png" alt="PandaUI logo" width="64"></p>
 
 # PandaUI
 
