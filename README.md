@@ -93,6 +93,12 @@ Follow a Leveling, PvP or Raid build: the advisor highlights the talent to pick 
 
 A unified bag and bank window with sorting, search and one-click junk selling.
 
+**Category view**: switch the bag to sort your items into categories automatically: Quest Items, Potions, Buffs, Cloth, Gems, Trade Goods, Recipes and more. Collapse any category you don't need, mark favorites to keep them at the top, and see every free slot as a single "Empty" counter. The bank uses the same view.
+
+| Category view | Unified bag |
+|---|---|
+| ![Bag category view](screenshots/bags-categories.jpg) | ![Unified bag](screenshots/bags-unified.jpg) |
+
 ## Extras
 
 - Saved bank, viewable anywhere.
