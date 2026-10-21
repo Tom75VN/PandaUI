@@ -1,3 +1,15 @@
+## PandaUI 0.11.1
+
+* Minimap:
+   * New round panda settings button, fixed on the minimap rim so it follows the minimap when you move it
+   * Every icon around the minimap (tracking, mail, battleground, meeting stone, the Turtle battleground, shop and LFT buttons, and the settings button) can be dragged along the minimap edge
+   * `/pui reset` puts every icon back in its original place
+* Profiles:
+   * Characters on realms with an apostrophe (such as N'Zoth) or with accented names now get their own profile instead of all sharing "Character Profile"
+   * Your current settings carry over to the new character profile automatically
+   * Profile names may now contain apostrophes
+* New PandaUI logo in the settings: the title icon and the watermark
+
 ## PandaUI 0.11.0
 
 First release of PandaUI: UnrealUI 0.10.2 ported to the **OctoWoW 1.12.1 client**, with the UnrealUI 0.11.0 nameplate options included.

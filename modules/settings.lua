@@ -426,7 +426,8 @@ end
 -- that also carries the native pages), never on a page, so it stays put while
 -- pages switch or scroll, and it sits on a BACKGROUND layer so every widget
 -- draws above it.
-local PANDA_WIDTH, PANDA_HEIGHT = 185, 225   -- source ratio 379:461
+-- Square pUI_logo art at the 185-unit width of the watermark it replaced.
+local PANDA_WIDTH, PANDA_HEIGHT = 185, 185
 local PANDA_ALPHA = 0.2
 local PANDA_INSET = 8
 
@@ -434,7 +435,7 @@ local function AddPandaWatermark(host)
   if not host or host.pandaWatermark then return end
   local ok, tex = pcall(host.CreateTexture, host, nil, "BACKGROUND")
   if not ok or not tex then return end
-  pcall(tex.SetTexture, tex, M.texture.settingsPanda)
+  pcall(tex.SetTexture, tex, M.texture.addonLogo)
   pcall(tex.SetWidth, tex, PANDA_WIDTH)
   pcall(tex.SetHeight, tex, PANDA_HEIGHT)
   pcall(tex.SetPoint, tex, "BOTTOMRIGHT", host, "BOTTOMRIGHT",

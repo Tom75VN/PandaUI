@@ -18,6 +18,10 @@ local U = PandaUI
 local CONFIG_VERSION = 9
 local PROFILE_STORE_VERSION = 1
 local MAX_PROFILE_NAME = 64
+-- Per-character store version (PandaUIProfileDB.version). Version 2 moves a
+-- character off the shared fallback profile onto its own named profile.
+local CHARACTER_STORE_VERSION = 2
+local FALLBACK_PROFILE = "Character Profile"
 
 -- Anchor points are the only persisted strings that are passed to SetPoint.
 -- Whitelisting them means a corrupted value is rejected before it reaches the
@@ -107,9 +111,13 @@ local function IsSafeProfileName(value)
   if not IsSafeString(value) or value == "" then return false end
   if string.len(value) > MAX_PROFILE_NAME then return false end
   -- Profile names are rendered in labels and chat. Keep colour escapes and
-  -- punctuation with UI meaning out of that path while allowing the names,
-  -- spaces, hyphens and underscores used by character/realm identifiers.
-  if string.find(value, "[^%w%s%-%_]") then return false end
+  -- punctuation with UI meaning out of that path while allowing what
+  -- character/realm identifiers contain: letters, digits, spaces, hyphens,
+  -- underscores, apostrophes (realm "N'Zoth") and UTF-8 bytes (accented
+  -- character names). Rejecting the apostrophe made every N'Zoth character
+  -- share the "Character Profile" fallback
+  -- (knowledge.json / config.profile_name_realm_apostrophe_fallback).
+  if string.find(value, "[^%w%s%-%_'\128-\255]") then return false end
   return true
 end
 
@@ -344,16 +352,13 @@ local function CharacterProfileName()
     if ok and type(value) == "string" and value ~= "" then realm = value end
   end
 
-  local candidate
-  if name and realm then
-    candidate = name .. " - " .. realm
-  elseif name then
-    candidate = name
-  else
-    candidate = "Character Profile"
+  if name and realm and IsSafeProfileName(name .. " - " .. realm) then
+    return name .. " - " .. realm
   end
-  if IsSafeProfileName(candidate) then return candidate end
-  return "Character Profile"
+  -- The character name alone still keeps characters apart; the shared
+  -- fallback is the last resort.
+  if name and IsSafeProfileName(name) then return name end
+  return FALLBACK_PROFILE
 end
 
 local function SortedProfileNames(exclude)
@@ -411,6 +416,27 @@ function U.LoadConfig()
   end
 
   characterKey = CharacterProfileName()
+
+  -- Characters loaded while their realm name was rejected all landed on the
+  -- shared fallback profile. Once per character, move it to its own profile,
+  -- seeded from that shared one so its current settings carry over. The
+  -- stamp is only written once the real name resolved, so a load that could
+  -- not read it retries next time.
+  if (tonumber(PandaUIProfileDB.version) or 1) < CHARACTER_STORE_VERSION and
+     characterKey ~= FALLBACK_PROFILE then
+    if PandaUIProfileDB.active == FALLBACK_PROFILE and
+       type(profiles[FALLBACK_PROFILE]) == "table" then
+      if type(profiles[characterKey]) ~= "table" then
+        profiles[characterKey] = CopyTable(profiles[FALLBACK_PROFILE])
+      end
+      PandaUIProfileDB.active = characterKey
+      -- "Character Profile" was never a real character; dropping its
+      -- assignment lets the old shared profile be deleted once unused.
+      assignments[FALLBACK_PROFILE] = nil
+    end
+    PandaUIProfileDB.version = CHARACTER_STORE_VERSION
+  end
+
   local active = PandaUIProfileDB.active
   if not IsSafeProfileName(active) or type(profiles[active]) ~= "table" then
     active = characterKey

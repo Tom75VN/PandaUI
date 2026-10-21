@@ -86,7 +86,13 @@ M.compactTextShadowOffset = { 1, -1 }
 M.texture = {
   plain = "Interface\\BUTTONS\\WHITE8X8",
   statusBar = "Interface\\AddOns\\pandaUI\\media\\Textures\\normTex2",
+  -- 256x256 TGA of the author's "Magical Panda UI Designer.png" (1254 px),
+  -- cropped to its art, padded square and downscaled with premultiplied
+  -- alpha: the bottom-right settings watermark (modules/settings.lua).
   addonLogo = "Interface\\AddOns\\pandaUI\\media\\icons\\pUI_logo",
+  -- 64x64 TGA of the author's pUI-logo-small.png, drawn at 18-20 units
+  -- beside the Panda UI settings title (modules/gamesettings.lua).
+  addonLogoSmall = "Interface\\AddOns\\pandaUI\\media\\icons\\pUI_logo-small",
   -- Official client documentation uses this native TargetingFrame texture as
   -- the StatusBar example; the Classic unit-frame theme reuses it directly.
   classicStatusBar = "Interface\\TargetingFrame\\UI-StatusBar",
@@ -103,12 +109,15 @@ M.texture = {
   chatResizeGrip = "Interface\\AddOns\\pandaUI\\media\\resize",
   restIcon = "Interface\\AddOns\\pandaUI\\media\\rest-icon",
   petHappiness = "Interface\\AddOns\\pandaUI\\media\\Textures\\ui-pethappiness",
-  -- 256x512 TGA (power-of-two) of a 379x461 source, stretched to fill it, so the
-  -- settings watermark draws it at the source ratio (modules/settings.lua).
+  -- 256x512 TGA (power-of-two) of a 379x461 source. Former settings
+  -- watermark, replaced by addonLogo; currently unused.
   settingsPanda = "Interface\\AddOns\\pandaUI\\media\\Textures\\panda-watermark",
   -- 64x64 TGA, user-supplied art (media/Textures/ATTRIBUTION.md): the World
   -- Map's "wheel zooms" hint drawn by modules/worldmap.lua.
   mapZoomHint = "Interface\\AddOns\\pandaUI\\media\\Textures\\mousewheel-zoom",
+  -- 64x64 TGA, user-supplied art (media/Textures/ATTRIBUTION.md): the round
+  -- panda settings button on the minimap rim, drawn by modules/minimap.lua.
+  settingsIcon = "Interface\\AddOns\\pandaUI\\media\\Textures\\settings-panda-icon",
   -- The modern unit frame's resting flipbook. This is an addon-owned copy of
   -- the user-supplied 42-cell sheet used by modern-wow, kept outside that
   -- theme's media tree so the two visual families do not depend on each

@@ -770,7 +770,7 @@ CMD_PROFILE_CURRENT       = "profil actuel : |cffffff00%s|r",
 CMD_PROFILE_CREATE_USAGE  = "  |cffffff00/pui profile create <nom>|r",
 CMD_PROFILE_UNAVAILABLE   = "la gestion des profils n'est pas disponible dans cette version",
 CMD_PROFILE_EXISTS        = "un profil nomme |cffffff00%s|r existe deja",
-CMD_PROFILE_NAME_RULES    = "les noms de profil peuvent contenir des lettres, des chiffres, des espaces, des tirets et des traits de soulignement (64 caracteres maximum)",
+CMD_PROFILE_NAME_RULES    = "les noms de profil peuvent contenir des lettres, des chiffres, des espaces, des tirets, des traits de soulignement et des apostrophes (64 caracteres maximum)",
 CMD_PROFILE_CREATED       = "profil |cffffff00%s|r cree et selectionne - |cffffff00/reload|r pour l'appliquer",
 
 -- Quest Log count boxes (modern-wow theme).

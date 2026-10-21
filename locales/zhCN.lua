@@ -768,7 +768,7 @@ CMD_PROFILE_CURRENT       = "当前配置文件：|cffffff00%s|r",
 CMD_PROFILE_CREATE_USAGE  = "  |cffffff00/pui profile create <名称>|r",
 CMD_PROFILE_UNAVAILABLE   = "此版本中配置文件管理不可用",
 CMD_PROFILE_EXISTS        = "名为 |cffffff00%s|r 的配置文件已存在",
-CMD_PROFILE_NAME_RULES    = "配置文件名称可包含字母、数字、空格、连字符和下划线（最多 64 个字符）",
+CMD_PROFILE_NAME_RULES    = "配置文件名称可包含字母、数字、空格、连字符、下划线和撇号（最多 64 个字符）",
 CMD_PROFILE_CREATED       = "已创建并选择配置文件 |cffffff00%s|r - 输入 |cffffff00/reload|r 以应用",
 
 -- Quest Log count boxes (modern-wow theme).

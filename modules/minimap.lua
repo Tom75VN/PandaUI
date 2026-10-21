@@ -1,7 +1,8 @@
 -- pandaUI :: modules/minimap.lua
 --
--- A settings button beside the minimap, and a mover anchor so the minimap
--- cluster can be dragged in pandaUI's edit mode.
+-- A settings button on the minimap ring, ring dragging for every minimap icon,
+-- and a mover anchor so the minimap cluster can be dragged in pandaUI's edit
+-- mode.
 --
 -- The map surface and its behavior stay native. Under the full Modern WoW
 -- theme or Classic's explicit Minimap selection, the stock decorative ring,
@@ -12,25 +13,30 @@
 -- theme (see "The pending-mail letter" below). knowledge.json /
 -- minimap.render_pass_under_ordinary_frames says the map surface is drawn in a
 -- special pass beneath ordinary frames, which is why the new shadow is alpha-
--- only over the map and the settings button remains outside the ring.
+-- only over the map.
 --
 -- The mover targets MinimapCluster rather than bare Minimap: behavior.json /
 -- minimap.context.frames.MinimapCluster confirms it holds the map's native
 -- chrome (zone text, etc.) and defaults to TOPRIGHT UIParent TOPRIGHT 0,0 with
 -- no pfUI involvement, so moving the cluster keeps that chrome attached and
 -- the registration's own default matches where the client already puts it.
--- The settings button stays anchored to Minimap itself, so it keeps tracking
--- correctly without any extra work when the cluster moves -- until the user
--- drags the button somewhere else, after which its own saved position wins.
+-- The settings button is a child of Minimap fixed on its rim, so it follows
+-- the cluster when it moves; like the other ring icons it only drags along the
+-- minimap's edge (see "Icons around the minimap").
 
 local U = PandaUI
 local M = U.media
 
 local MM = U.RegisterModule("minimap")
 
-local BUTTON_SIZE = 24
--- Stored through the shared position store (core/config.lua). Not a mover id:
--- the button is dragged directly rather than through edit mode.
+-- The native minimap icons: a 33px button (its hover glow fills it) whose
+-- visible MiniMap-TrackingBorder ring is about 28px across (texel bbox 4..39 of
+-- 64, drawn at 52px; Octo FrameXML Minimap.xml).
+local BUTTON_SIZE = 33
+local ICON_SIZE = 28
+local MINIMAP_HIGHLIGHT = "Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight"
+-- The button's old drag position in the shared position store. Only read to
+-- clear it: the button is now fixed to the minimap.
 local POSITION_ID = "minimapbutton"
 
 local modernWowMinimap = { dressed = false }
@@ -400,27 +406,222 @@ local function DressMailIcon()
   return true
 end
 
--- Anchored to the map's left edge so it never lands on the map surface or on
--- the stock chrome hanging off the right side -- unless the user has dragged
--- the button, in which case the position they dropped it on is used instead.
--- Also runs after /pui reset, so it clears the old anchor first rather than
--- stacking a second point on top of the one already there.
+-- ---------------------------------------------------------------------------
+-- Icons around the minimap
+--
+-- Every icon on the minimap ring can be dragged along it (user request,
+-- 2026-10-22): the native tracking, mail, battleground, meeting-stone icons,
+-- the Turtle battleground/shop/LFT buttons and pandaUI's settings button. The
+-- angle is saved per frame name in the module config. An icon never dragged
+-- keeps the place the client or the active theme gave it, and /pui reset puts
+-- every icon back there. The 1.12 globals cos, sin and atan2 work in degrees
+-- (WORKING_SOURCE: pandaConquest's ring button on this client).
+--
+-- The drag runs from one addon frame's OnUpdate, never the icon's own:
+-- LFTMinimapButton animates its eye through its OnUpdate. The icons' own
+-- drag scripts are replaced -- the Turtle buttons free-move to any screen
+-- spot, and LFT re-parents itself to UIParent on drop.
+-- ---------------------------------------------------------------------------
+local RING_ICONS = {
+  "PandaUISettingsButton",
+  "MiniMapTrackingFrame", "MiniMapMailFrame", "MiniMapBattlefieldFrame",
+  "MiniMapMeetingStoneFrame", "TWMiniMapBattlefieldFrame",
+  "TWMinimapShopFrame", "LFTMinimapButton",
+}
+local SETTINGS_NAME = "PandaUISettingsButton"
+-- Bottom-left, the usual minimap-button spot; no native icon starts there.
+local SETTINGS_DEFAULT_ANGLE = 225
+-- Icon centres sit this far outside the map's edge, like the native icons.
+local RING_OUTSET = 10
+
+local ring = { hooked = {}, original = {}, dragging = nil, stoppedAt = nil }
+
+function ring.Angles()
+  local cfg = U.ModuleConfig("minimap", { enabled = true, iconAngles = {} })
+  if type(cfg.iconAngles) ~= "table" then cfg.iconAngles = {} end
+  return cfg.iconAngles
+end
+
+function ring.Place(frame, angle)
+  local minimap = U.G("Minimap")
+  local cos, sin = U.G("cos"), U.G("sin")
+  if not frame or not minimap or type(angle) ~= "number" or
+     type(cos) ~= "function" or type(sin) ~= "function" then
+    return false
+  end
+
+  local width = 140
+  local ok, liveWidth = pcall(minimap.GetWidth, minimap)
+  if ok and type(liveWidth) == "number" and liveWidth > 0 then width = liveWidth end
+  local radius = width / 2 + RING_OUTSET
+
+  -- SetPoint offsets are in the icon's own scale, and the Turtle buttons are
+  -- UIParent children rather than Minimap children.
+  local mapOk, mapScale = pcall(minimap.GetEffectiveScale, minimap)
+  local ownOk, ownScale = pcall(frame.GetEffectiveScale, frame)
+  if mapOk and ownOk and type(mapScale) == "number" and
+     type(ownScale) == "number" and ownScale > 0 then
+    radius = radius * mapScale / ownScale
+  end
+
+  pcall(frame.ClearAllPoints, frame)
+  return pcall(frame.SetPoint, frame, "CENTER", minimap, "CENTER",
+    radius * cos(angle), radius * sin(angle))
+end
+
+-- The cursor's angle around the minimap centre, in [0, 360).
+function ring.CursorAngle()
+  local minimap, atan2 = U.G("Minimap"), U.G("atan2")
+  if not minimap or type(atan2) ~= "function" or
+     type(GetCursorPosition) ~= "function" then
+    return nil
+  end
+  local x, y = GetCursorPosition()
+  local scaleOk, scale = pcall(minimap.GetEffectiveScale, minimap)
+  local centerOk, cx, cy = pcall(minimap.GetCenter, minimap)
+  if type(x) ~= "number" or type(y) ~= "number" or not scaleOk or
+     not centerOk or type(cx) ~= "number" or type(cy) ~= "number" or
+     type(scale) ~= "number" or scale <= 0 then
+    return nil
+  end
+  return math.mod(atan2(y / scale - cy, x / scale - cx) + 360, 360)
+end
+
+function ring.Update()
+  local frame = ring.dragging
+  if not frame then return end
+  local angle = ring.CursorAngle()
+  if not angle then return end
+  angle = math.mod(math.floor(angle + 0.5), 360)
+  if angle ~= ring.dragAngle and ring.Place(frame, angle) then
+    ring.dragAngle = angle
+  end
+end
+
+function ring.StartDrag(frame)
+  ring.dragging = frame
+  ring.dragAngle = nil
+  pcall(frame.LockHighlight, frame)
+  if not ring.driver then
+    ring.driver = CreateFrame("Frame", nil, UIParent)
+    ring.driver:SetScript("OnUpdate", ring.Update)
+  end
+  ring.driver:Show()
+end
+
+function ring.StopDrag(frame)
+  if ring.dragging ~= frame then return end
+  ring.dragging = nil
+  ring.stoppedAt = GetTime()
+  if ring.driver then ring.driver:Hide() end
+  pcall(frame.UnlockHighlight, frame)
+  -- Keeps the client's layout cache from restoring an old free-moved spot.
+  pcall(frame.SetUserPlaced, frame, false)
+  local ok, name = pcall(frame.GetName, frame)
+  if ring.dragAngle and ok and name then ring.Angles()[name] = ring.dragAngle end
+end
+
+-- Whether the click arriving now is the release of a drag. GetTime is updated
+-- once per UI draw (api.json / core.time.v1), so a release in the same frame
+-- as the drop reads an identical stamp.
+function ring.ClickEndedADrag()
+  if ring.dragging then return true end
+  return ring.stoppedAt ~= nil and (GetTime() - ring.stoppedAt) < 0.02
+end
+
+-- Wraps an icon's click script so releasing a drag does not also click it.
+-- The original reads this/arg1 from globals, which are still set here.
+function ring.GuardScript(frame, script)
+  local ok, original = pcall(frame.GetScript, frame, script)
+  if not ok or type(original) ~= "function" then return end
+  pcall(frame.SetScript, frame, script, function()
+    if ring.ClickEndedADrag() then return end
+    original()
+  end)
+end
+
+function ring.Hook(frame)
+  local ok, name = pcall(frame.GetName, frame)
+  if not ok or not name or ring.hooked[name] then return false end
+
+  -- Where the client or the theme put it, re-applied by /pui reset. GetPoint
+  -- returns the tuple SetPoint was given (frames.getpoint_y_same_sign_as_setpoint).
+  local points = {}
+  local countOk, count = pcall(frame.GetNumPoints, frame)
+  if not countOk or type(count) ~= "number" then count = 0 end
+  local i
+  for i = 1, count do
+    local pointOk, point, relative, relativePoint, x, y = pcall(frame.GetPoint, frame, i)
+    if pointOk and point then
+      table.insert(points, { point, relative, relativePoint, x, y })
+    end
+  end
+
+  if not pcall(frame.RegisterForDrag, frame, "LeftButton") then
+    U.Debug("minimap ring: RegisterForDrag failed on " .. name)
+    return false
+  end
+  pcall(frame.SetScript, frame, "OnDragStart", function() ring.StartDrag(frame) end)
+  pcall(frame.SetScript, frame, "OnDragStop", function() ring.StopDrag(frame) end)
+  ring.GuardScript(frame, "OnClick")
+  ring.GuardScript(frame, "OnMouseUp")
+
+  ring.original[name] = points
+  ring.hooked[name] = true
+  return true
+end
+
+function ring.ApplySaved()
+  local angles = ring.Angles()
+  local i
+  for i = 1, table.getn(RING_ICONS) do
+    local name = RING_ICONS[i]
+    local angle = tonumber(angles[name])
+    if ring.hooked[name] and angle then ring.Place(U.G(name), angle) end
+  end
+end
+
+function ring.Reset()
+  local angles = ring.Angles()
+  local i, j
+  for i = 1, table.getn(RING_ICONS) do
+    local name = RING_ICONS[i]
+    local frame = U.G(name)
+    local points = ring.original[name]
+    angles[name] = nil
+    if frame and points and table.getn(points) > 0 then
+      pcall(frame.ClearAllPoints, frame)
+      for j = 1, table.getn(points) do
+        pcall(frame.SetPoint, frame, unpack(points[j]))
+      end
+    end
+  end
+  return true
+end
+
+function ring.Setup()
+  local hooked = 0
+  local i
+  for i = 1, table.getn(RING_ICONS) do
+    local frame = U.G(RING_ICONS[i])
+    if frame and ring.Hook(frame) then hooked = hooked + 1 end
+  end
+  ring.ApplySaved()
+  -- The client can re-apply a user-placed spot from its layout cache after
+  -- login, so the saved angles are asserted again on entering the world.
+  U.RegisterEvent("PLAYER_ENTERING_WORLD", ring.ApplySaved)
+  U.OnPositionReset(ring.Reset)
+  U.Debug("minimap ring: " .. hooked .. " icons draggable around the minimap")
+end
+
+-- The settings button's first place: its saved angle, else bottom-left. The
+-- fallbacks below only apply when the minimap or the trig globals are missing.
 local function AnchorButton(button)
   pcall(button.ClearAllPoints, button)
 
-  local saved = U.GetPosition(POSITION_ID)
-  if saved and U.ApplyFramePoint(button, saved) then
-    return "its saved position"
-  end
-
-  local minimap = U.G("Minimap")
-  if minimap then
-    local gap = 6
-    if modernWowMinimap.border then
-      gap = gap + M.modernWow.minimap.borderOffset
-    end
-    button:SetPoint("TOPRIGHT", minimap, "TOPLEFT", -gap, 0)
-    return "Minimap"
+  local angle = tonumber(ring.Angles()[SETTINGS_NAME]) or SETTINGS_DEFAULT_ANGLE
+  if ring.Place(button, angle) then
+    return "Minimap ring at " .. angle
   end
 
   local cluster = U.G("MinimapCluster")
@@ -497,101 +698,6 @@ local function EnableMouseWheelZoom()
   end
 
   U.Debug("minimap: mouse-wheel zoom enabled")
-  return true
-end
-
--- ---------------------------------------------------------------------------
--- Dragging the settings button
---
--- The button is its own drag handle. knowledge.json /
--- frames.movable_drag_requires_button_handle's verified recipe needs the
--- widget that receives the drag to be a Button, with SetMovable applied
--- immediately before each drag and a throwaway StartMoving/StopMovingOrSizing
--- pair to collapse the anchor down to the single point the client will move.
--- U.CreateButton already builds a real Button, so no separate handle is
--- created: an overlay covering this 24px button would take the mouse away from
--- it and cost both the click and the hover state.
---
--- A drop re-anchors the button to UIParent, so it stops tracking the minimap.
--- That is the point of moving it, and it is recoverable -- /pui reset drops the
--- stored position and puts the button back beside the map.
--- ---------------------------------------------------------------------------
-local dragState = { dragging = false, stoppedAt = nil }
-
-local function StartButtonDrag(button)
-  if not pcall(button.SetMovable, button, true) then
-    U.Error("minimap button: SetMovable failed; the button cannot be moved")
-    return false
-  end
-
-  if pcall(button.StartMoving, button) then
-    pcall(button.StopMovingOrSizing, button)
-  end
-
-  if not pcall(button.StartMoving, button) then
-    U.Error("minimap button: StartMoving failed; the button will not drag")
-    return false
-  end
-
-  dragState.dragging = true
-  return true
-end
-
--- The dropped anchor is captured and stored, and the button is left exactly
--- where it was released: knowledge.json / frames.getpoint_relative_name_y_
--- inverted lists recapturing and immediately re-applying a point as a failed
--- approach, which is why nothing is re-anchored here. The offsets are read
--- through U.ReadFramePoint (edges, sign-safe): U.GetFramePoint negated the Y
--- the client writes after StartMoving (frames.getpoint_y_same_sign_as_setpoint),
--- so a dropped button reloaded mirrored across its anchor.
-local function StopButtonDrag(button)
-  if not dragState.dragging then return false end
-  dragState.dragging = false
-  dragState.stoppedAt = GetTime()
-  pcall(button.StopMovingOrSizing, button)
-
-  local point, relative, relativePoint, x, y = U.ReadFramePoint(button)
-  if not point then
-    U.Debug("minimap button: no readable anchor after drag")
-    return false
-  end
-
-  -- Stored positions are re-applied against UIParent. The drag is expected to
-  -- leave the button screen-anchored, so this says what happened instead of
-  -- silently storing an offset measured from a different origin.
-  if relative and relative ~= UIParent then
-    U.Debug("minimap button: anchored to a non-UIParent frame after drag; storing anyway")
-  end
-
-  return U.SavePosition(POSITION_ID, point, relativePoint, x, y)
-end
-
--- Whether the click that is arriving now is really the end of a drag. GetTime
--- is updated once per UI draw (api.json / core.time.v1), so a click released in
--- the same frame as the drop reads an identical stamp, while the user's next
--- real click is at least one frame later.
-local function ClickEndedADrag()
-  if dragState.dragging then return true end
-  if not dragState.stoppedAt then return false end
-  return (GetTime() - dragState.stoppedAt) < 0.02
-end
-
-local function EnableButtonDrag(button)
-  pcall(button.SetMovable, button, true)
-  -- Documented (Frame:SetClampedToScreen) but not runtime-verified here, so it
-  -- is a bonus rather than the only thing keeping the button reachable: a
-  -- button dragged off-screen is still recoverable through /pui reset.
-  pcall(button.SetClampedToScreen, button, true)
-
-  if not pcall(button.RegisterForDrag, button, "LeftButton") then
-    U.Error("minimap button: RegisterForDrag failed; the button will not drag")
-    return false
-  end
-
-  button:SetScript("OnDragStart", function() StartButtonDrag(button) end)
-  button:SetScript("OnDragStop", function() StopButtonDrag(button) end)
-
-  U.OnPositionReset(function() return AnchorButton(button) and true end)
   return true
 end
 
@@ -716,37 +822,56 @@ function MM:OnEnable()
 
   DressModernWowMinimap()
 
-  local button = U.CreateButton(UIParent, {
-    name = "PandaUISettingsButton",
-    width = BUTTON_SIZE,
-    height = BUTTON_SIZE,
-    text = "",
-    onClick = function()
-      -- Releasing a drag over the button must not also open the window.
-      if ClickEndedADrag() then return end
-      if type(U.OpenSettings) == "function" then U.OpenSettings() end
-    end,
-  })
+  -- A child of Minimap, so it moves, scales and hides with the map. Its frame
+  -- level sits above the map's own so its clicks are not taken as pings.
+  local minimap = U.G("Minimap")
+  -- A plain Button rather than U.CreateButton: the round panda icon carries
+  -- its own gold rim, so the square backdrop and border are left out.
+  local button = CreateFrame("Button", "PandaUISettingsButton", minimap or UIParent)
+  button:SetWidth(BUTTON_SIZE)
+  button:SetHeight(BUTTON_SIZE)
+  pcall(button.EnableMouse, button, true)
+  button:SetScript("OnClick", function()
+    if type(U.OpenSettings) == "function" then U.OpenSettings() end
+  end)
+  if minimap then
+    local ok, level = pcall(minimap.GetFrameLevel, minimap)
+    if ok and type(level) == "number" then
+      pcall(button.SetFrameLevel, button, level + 5)
+    end
+  end
 
-  local border = U.BorderSize()
+  -- The button used to be draggable to any screen position. That position is
+  -- no longer used, so drop it from SavedVariables.
+  if U.db and type(U.db.positions) == "table" then
+    U.db.positions[POSITION_ID] = nil
+  end
+
+  -- The panda icon fills the button; the stock gear is the fallback if the
+  -- addon texture is rejected.
   local icon = button:CreateTexture(nil, "ARTWORK")
-  icon:SetPoint("TOPLEFT", button, "TOPLEFT", border, -border)
-  icon:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -border, border)
-
-  -- A stock icon path. Nothing in the compact DB covers Interface\ICONS on this
-  -- client, so if the call is rejected the button falls back to its own label
-  -- rather than showing an empty square.
-  local applied = pcall(icon.SetTexture, icon, "Interface\\ICONS\\INV_Misc_Gear_01")
-  if applied then
+  icon:SetWidth(ICON_SIZE)
+  icon:SetHeight(ICON_SIZE)
+  icon:SetPoint("CENTER", button, "CENTER", 0, 0)
+  if not pcall(icon.SetTexture, icon, M.texture.settingsIcon) then
+    pcall(icon.SetTexture, icon, "Interface\\ICONS\\INV_Misc_Gear_01")
     pcall(icon.SetTexCoord, icon, 0.08, 0.92, 0.08, 0.92)
-  else
-    icon:Hide()
-    if button.label then button.label:SetText("UI") end
   end
   button.icon = icon
 
+  -- Hover glow: the same texture the native minimap buttons (mail, meeting
+  -- stone, zoom) declare as their HighlightTexture with alphaMode ADD in Octo
+  -- FrameXML Minimap.xml. Set through the client's own highlight slot so the
+  -- client owns the mouseover show/hide; ADD is requested as well.
+  if pcall(button.SetHighlightTexture, button, MINIMAP_HIGHLIGHT) then
+    local ok, glow = pcall(button.GetHighlightTexture, button)
+    if ok and glow then
+      pcall(glow.SetAllPoints, glow, button)
+      pcall(glow.SetBlendMode, glow, "ADD")
+    end
+  end
+
   local anchor = AnchorButton(button)
-  EnableButtonDrag(button)
 
   self.button = button
   Apply()
@@ -755,6 +880,13 @@ function MM:OnEnable()
   RegisterMinimapMover()
   EnableMouseWheelZoom()
   HookPingPlacement()
+
+  -- After the theme has placed the native icons, so /pui reset returns them
+  -- there. Own pcall: a failure must not take the mail letter down with it.
+  local ringOk, ringErr = pcall(ring.Setup)
+  if not ringOk then
+    U.Error("minimap ring icons: " .. tostring(ringErr))
+  end
 
   -- Last, and inside its own pcall. RunModulePhase already wraps OnEnable, so
   -- an error raised here would abort the whole method -- and everything above

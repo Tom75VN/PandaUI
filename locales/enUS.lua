@@ -797,7 +797,7 @@ CMD_PROFILE_CURRENT       = "current profile: |cffffff00%s|r",
 CMD_PROFILE_CREATE_USAGE  = "  |cffffff00/pui profile create <name>|r",
 CMD_PROFILE_UNAVAILABLE   = "profile management is unavailable in this build",
 CMD_PROFILE_EXISTS        = "a profile named |cffffff00%s|r already exists",
-CMD_PROFILE_NAME_RULES    = "profile names may contain letters, numbers, spaces, hyphens and underscores (maximum 64 characters)",
+CMD_PROFILE_NAME_RULES    = "profile names may contain letters, numbers, spaces, hyphens, underscores and apostrophes (maximum 64 characters)",
 CMD_PROFILE_CREATED       = "created and selected profile |cffffff00%s|r - |cffffff00/reload|r to apply it",
 
 -- Quest Log count boxes (modern-wow theme). The label draws in gold; the

@@ -787,7 +787,7 @@ CMD_PROFILE_CURRENT       = "текущий профиль: |cffffff00%s|r",
 CMD_PROFILE_CREATE_USAGE  = "  |cffffff00/pui profile create <имя>|r",
 CMD_PROFILE_UNAVAILABLE   = "управление профилями недоступно в этой сборке",
 CMD_PROFILE_EXISTS        = "профиль с именем |cffffff00%s|r уже существует",
-CMD_PROFILE_NAME_RULES    = "имя профиля может содержать буквы, цифры, пробелы, дефисы и подчёркивания (не более 64 символов)",
+CMD_PROFILE_NAME_RULES    = "имя профиля может содержать буквы, цифры, пробелы, дефисы, подчёркивания и апострофы (не более 64 символов)",
 CMD_PROFILE_CREATED       = "создан и выбран профиль |cffffff00%s|r — |cffffff00/reload|r, чтобы применить",
 
 -- Quest Log count boxes (modern-wow theme).

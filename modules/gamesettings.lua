@@ -1314,7 +1314,7 @@ function gs.CategoryTitleText(page)
 end
 
 function gs.PageLogoPath(page)
-  if page.id == "pandaui" then return M.texture.addonLogo end
+  if page.id == "pandaui" then return M.texture.addonLogoSmall end
   if page.settings and type(U.GetIntegratedSettingsIcon) == "function" then
     return U.GetIntegratedSettingsIcon(page.settingsScope)
   end
@@ -4870,7 +4870,7 @@ function gs.Build()
   -- The open page's name, above that rule, where Forever puts
   -- SettingsList.Header.Title.
   gs.pageLogo = gs.content:CreateTexture(nil, "OVERLAY")
-  gs.pageLogo:SetTexture(M.texture.addonLogo)
+  gs.pageLogo:SetTexture(M.texture.addonLogoSmall)
   gs.pageLogo:SetWidth(gs.PAGE_LOGO_SIZE)
   gs.pageLogo:SetHeight(gs.PAGE_LOGO_SIZE)
   gs.pageLogo:Hide()
