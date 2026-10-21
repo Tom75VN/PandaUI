@@ -109,7 +109,7 @@ Use `/pui` to open the settings, `/pui unlock` to arrange supported elements, `/
 
 ## Version
 
-Current release: **0.1.0**
+Current release: **0.11.0**
 
 ## Acknowledgements
 
