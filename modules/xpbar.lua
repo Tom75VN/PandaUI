@@ -575,7 +575,13 @@ local function XPTooltipShow()
   GameTooltip:AddDoubleLine(U.L("XPTIP_TIME_LEFT"),
     (perSecond and FormatDuration(remaining / perSecond)) or "--", 1, 1, 1, 1, 1, 1)
 
-  GameTooltip:Show()
+  -- Plain Show leaves right-hand values wrapped by line widths an earlier
+  -- tooltip left behind; modules/tooltip.lua owns the fitted layout.
+  if type(U.ShowTooltipFitted) == "function" then
+    U.ShowTooltipFitted(GameTooltip, "GameTooltip")
+  else
+    GameTooltip:Show()
+  end
 end
 
 local function XPTooltipHide()

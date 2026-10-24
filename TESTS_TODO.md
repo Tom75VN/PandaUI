@@ -4,6 +4,21 @@ In-game tests still owed on OctoWoW. Tick an item once it passes. Report a
 failure with its number and what you saw (exact error text if any); every
 result is recorded in `knowledge.json` (`USER_CONFIRMED_INGAME`).
 
+## URGENT: stutter with pandaUI only (reported 2026-10-25)
+
+The client stutters with only pandaUI enabled and not with no addons. Run this
+before any other test: no optimisation is attempted until it has data.
+
+Probe: `PandaRuntimeProbe/PandaUIStutterProbe.lua`, group `puistutter`.
+Knowledge records: `perf.pandaui_only_stutter`,
+`api.debugprofilestop_octo_unverified`. Reading the results:
+`.claude/rules/pandaui-diagnostics.md`.
+
+- [ ] S1. Fully relaunch the client once (the probe TOC gained a file; `/reload` is not enough).
+- [ ] S2. pandaUI and PandaRuntimeProbe enabled. Go where it stutters, stand still, out of combat, type `/prp puistutter`. About 2 minutes; pandaUI blinks off and on, which is expected. When chat says "results saved", type `/prp reload`.
+- [ ] S3. At character select, disable pandaUI and keep PandaRuntimeProbe. Same spot, `/prp puistutter` (records the no-pandaUI reference), then `/prp reload`.
+- [ ] S4. Report that both runs are done, plus any Lua error and the chat summary lines (`on ... | luaOff ... | hidden ...` and `noPandaUI ...`).
+
 ## Nameplates: ShaguPlates options (ported 2026-10-20)
 
 Code: `modules/nameplates.lua`, `modules/nameplatesettings.lua`,

@@ -422,7 +422,11 @@ function book.PlaceSpellText(index, state, name, sub)
       name:SetWidth(layout.width)
       name:SetJustifyH("LEFT")
     end)
-    U.ClearTextShadow(name)
+    if type(U.SetSpellNameShadow) == "function" then
+      U.SetSpellNameShadow(name)
+    else
+      U.ClearTextShadow(name)
+    end
   end
   if sub and name then
     pcall(function()

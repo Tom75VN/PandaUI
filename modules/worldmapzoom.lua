@@ -287,9 +287,14 @@ local function OnWheel()
 end
 
 -- Public: keep a WorldMapButton descendant at its own size and pinned to the
--- visible map while zoomed. Callable before the module is installed.
+-- visible map while zoomed. Callable before the module is installed. Also
+-- handed to pandaMap's zoom, which owns the zoom when pandaMap is loaded.
 function U.WorldMapZoomPin(frame, point, relativePoint, x, y)
   if not frame or type(frame.SetScale) ~= "function" then return end
+  local pandaMapZoom = U.G("PandaMapZoom")
+  if type(pandaMapZoom) == "table" and type(pandaMapZoom.Pin) == "function" then
+    pcall(pandaMapZoom.Pin, frame, point, relativePoint, x, y)
+  end
   local i
   for i = 1, table.getn(state.pins) do
     if state.pins[i].frame == frame then return end
@@ -531,8 +536,25 @@ local function Install()
   return true
 end
 
+-- pandaMap's MapZoom.lua owns the zoom while it claims it, so two zooms never
+-- stack; it calls OnEnable again when its own install fails.
+local function PandaMapClaimsZoom()
+  local pandaMapZoom = U.G("PandaMapZoom")
+  if type(pandaMapZoom) ~= "table" or type(pandaMapZoom.ClaimsZoom) ~= "function" then
+    return false
+  end
+  local ok, claims = pcall(pandaMapZoom.ClaimsZoom)
+  return ok and claims and true or false
+end
+
 function ZOOM:OnEnable()
   if state.installed then return end
+  if PandaMapClaimsZoom() then
+    state.yielded = "pandaMap"
+    U.Debug("world map zoom left to pandaMap")
+    return
+  end
+  state.yielded = nil
   local ok, installed, failure = pcall(Install)
   if not ok then
     state.failure = tostring(installed)

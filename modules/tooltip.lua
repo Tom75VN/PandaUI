@@ -803,6 +803,36 @@ function U.ShowCompareTooltipHeader(tooltip, name)
   return first
 end
 
+-- Shows an addon-built tooltip with every populated line laid out in full.
+-- Line regions are shared between tooltips and keep the width of whatever the
+-- last one wrote there, and a line is measured against that width when its
+-- text is set (see the layout notes above WriteCompareLine). A short earlier
+-- string therefore wrapped the XP tooltip's right-hand values onto extra rows.
+-- Each line is rewritten against a width nothing reaches, then the frame is
+-- shown and the right-hand column re-anchored, as the comparison path does.
+function U.ShowTooltipFitted(tooltip, name)
+  if not tooltip then return end
+  if type(name) ~= "string" then
+    pcall(tooltip.Show, tooltip)
+    return
+  end
+
+  local countOk, lineCount = pcall(tooltip.NumLines, tooltip)
+  if countOk and type(lineCount) == "number" then
+    local lineIndex, sideIndex
+    for lineIndex = 1, lineCount do
+      for sideIndex = 1, table.getn(COMPARE_TEXT_SIDES) do
+        local label = U.G(name .. "Text" .. COMPARE_TEXT_SIDES[sideIndex] .. lineIndex)
+        local text = U.TooltipRegionText(label)
+        if text then WriteCompareLine(label, text) end
+      end
+    end
+  end
+
+  pcall(tooltip.Show, tooltip)
+  FitCompareTooltip(tooltip, name)
+end
+
 -- Comparison tooltips are not owned by the bag module. The client can show
 -- ShoppingTooltip1/2 from merchant, character, auction and other native item
 -- paths, so their modern skin must be driven from the tooltip frames

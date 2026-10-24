@@ -4621,6 +4621,45 @@ mw.npcDialogs = {
   },
 }
 
+-- The gold ring is part of the BACKGROUND quadrant art on the chrome frame,
+-- one level below the window, while the NPC portrait is a region of the
+-- window itself, so the portrait drew over the rim (user screenshot,
+-- 2026-10-25). Redraw the ring's square from that same art on a child frame
+-- above the window: its opening is transparent, so the face shows through and
+-- any overflow lands under the rim. Pixels around the ring repeat the art
+-- beneath and change nothing.
+function mw.NpcPortraitRing(frame, ring, sx, sy)
+  local window = frame.puiModernWowWindow
+  local quadrants = window and window.quadrants
+  if not quadrants or not quadrants.tl then return end
+
+  local overlay = window.npcRing
+  if not overlay then
+    overlay = CreateFrame("Frame", nil, frame)
+    pcall(overlay.EnableMouse, overlay, false)
+    -- panel-top-left is 256x256 for the 256x256 top-left quadrant of the
+    -- 384x512 design, so the ring's design rect is also its pixel rect.
+    local texture = mw.Texture(overlay, "OVERLAY",
+                               M.modernWow.texture.panelTopLeft,
+                               ring.left / 256, (ring.left + ring.size) / 256,
+                               ring.top / 256, (ring.top + ring.size) / 256)
+    if not texture then return end
+    pcall(texture.SetAllPoints, texture, overlay)
+    overlay.texture = texture
+    window.npcRing = overlay
+  end
+
+  local level = mw.Dimension(frame, "GetFrameLevel")
+  pcall(overlay.SetFrameLevel, overlay, level + 2)
+  pcall(function()
+    overlay:ClearAllPoints()
+    overlay:SetWidth(ring.size * sx)
+    overlay:SetHeight(ring.size * sy)
+    overlay:SetPoint("TOPLEFT", frame, "TOPLEFT", ring.left * sx, -ring.top * sy)
+    overlay:Show()
+  end)
+end
+
 function mw.PlaceNpcPortrait(frame, portrait)
   if not frame or not portrait then return false end
 
@@ -4634,6 +4673,7 @@ function mw.PlaceNpcPortrait(frame, portrait)
 
   local sx = width / token.designWidth
   local sy = height / token.designHeight
+  mw.NpcPortraitRing(frame, ring, sx, sy)
   local inset = ring.inset or 0
   local size = ring.size - 2 * inset
   local ok = pcall(function()
@@ -4684,7 +4724,11 @@ function U.ModernWowMerchantChrome(frame, panel, portrait, closeName)
   if not frame.puiModernWowMerchantFooter then
     local f = token.footer
     local width, height = f.right - f.left, f.bottom - f.top
-    local wash = mw.Texture(holder, "ARTWORK", M.modernWow.texture.questFooter,
+    -- BUG (reported in game, 2026-10-25): the wash covered the repair bar
+    -- and money plate. All three were ARTWORK on one frame, where the client
+    -- does not order same-layer textures by creation. BORDER keeps the wash
+    -- above the BACKGROUND window art and below both plates.
+    local wash = mw.Texture(holder, "BORDER", M.modernWow.texture.questFooter,
                             0, width / f.atlas, 0, height / f.atlas)
     if wash then
       pcall(function()
@@ -5165,6 +5209,7 @@ function mw.BuildCharacter()
           U.BuildCharacterStatsPanel(frame)) then
     mw.CharacterStatsFrame(frame)
   end
+  mw.PetStatBoxes(frame)
 
   local i
   for i = 1, entry.tabCount do
@@ -5523,6 +5568,10 @@ end
 function mw.RefreshCharacterLevelLine(level)
   local text = mw.characterLevelText
   if not text then return end
+  if mw.petHeaderText then
+    pcall(text.SetText, text, mw.petHeaderText)
+    return
+  end
   local okClass, className, token = pcall(UnitClass, "player")
   if not okClass or not className then return end
   level = tonumber(level)
@@ -5558,17 +5607,39 @@ function mw.PlaceCharacterLevelLine(frame)
   if not text or mw.characterLevelPlaced then return end
 
   local token = M.modernWow.characterLevelLine
+  local rise = mw.petHeaderOffset and 3 or 0
   local state = frame and frame.puiModernWowWindow
   pcall(function()
     text:ClearAllPoints()
     if state and state.expanded then
       text:SetPoint("TOP", frame, "TOPLEFT",
-                    mw.CharacterPaperDollCentreX(), -token.top)
+                    mw.CharacterPaperDollCentreX(), -token.top + rise)
     else
-      text:SetPoint("TOP", frame, "TOP", 0, -token.top)
+      text:SetPoint("TOP", frame, "TOP", 0, -token.top + rise)
     end
   end)
   mw.characterLevelPlaced = true
+end
+
+function U.SetModernWowPetHeaderOffset(active)
+  active = active and true or false
+  if mw.petHeaderOffset == active then return end
+  mw.petHeaderOffset = active
+  mw.characterLevelPlaced = nil
+  mw.PlaceCharacterLevelLine(U.G("CharacterFrame"))
+end
+
+-- On the Pet tab the level line carries the pet's own "Level <n> <family>"
+-- (the native PetLevelText) instead of the player's class line (user request,
+-- 2026-10-20); nil restores the class line. Returns true when the themed line
+-- exists to take it, so the caller knows to free its own pet level row.
+function U.SetModernWowPetHeaderText(value)
+  if type(value) ~= "string" or value == "" then value = nil end
+  if mw.petHeaderText ~= value then
+    mw.petHeaderText = value
+    mw.RefreshCharacterLevelLine()
+  end
+  return mw.characterLevelText and true or false
 end
 
 -- The guild line ("<rank> of <guild>", the native CharacterGuildText: global
@@ -5720,6 +5791,141 @@ function mw.CharacterStatsFrame(frame)
     local ok, shown = pcall(paperDoll.IsShown, paperDoll)
     if ok and not shown then box:Hide() end
   end
+end
+
+-- Pet tab stat boxes: the two stat columns framed by the ThinBorder rim
+-- (M.modernWow.petStatBoxes). Each column's rect is the union of its named
+-- row frames, read as bounded numbers relative to the window; nothing is
+-- anchored to them (rules/pandaui.md, native widget ownership). Rows are
+-- only laid out once the page shows, so this builds on the page's first show
+-- and retries on a later one if any read fails.
+function mw.PetColumnRect(frame, names)
+  local frameLeft = mw.Dimension(frame, "GetLeft")
+  local frameTop = mw.Dimension(frame, "GetTop")
+  if frameLeft == 0 or frameTop == 0 then return nil end
+  local l, t, r, b
+  local i
+  for i = 1, table.getn(names) do
+    local row = U.G(names[i])
+    if not row then return nil end
+    local left = mw.Dimension(row, "GetLeft")
+    local top = mw.Dimension(row, "GetTop")
+    local right = mw.Dimension(row, "GetRight")
+    local bottom = mw.Dimension(row, "GetBottom")
+    if left == 0 or top == 0 or right == 0 or bottom == 0 then return nil end
+    left, right = left - frameLeft, right - frameLeft
+    top, bottom = frameTop - top, frameTop - bottom
+    l = l and math.min(l, left) or left
+    t = t and math.min(t, top) or top
+    r = r and math.max(r, right) or right
+    b = b and math.max(b, bottom) or bottom
+  end
+  return l, t, r, b
+end
+
+function mw.BuildPetStatBoxes(frame, state, page)
+  if state.petStatsFrame then return end
+  local token = M.modernWow.petStatBoxes
+  local rects = {}
+  local c
+  for c = 1, table.getn(token.columns) do
+    local l, t, r, b = mw.PetColumnRect(frame, token.columns[c])
+    if not l then return end
+    rects[c] = { l, t, r, b }
+  end
+
+  -- At the chrome's level, below the page's stock stats, as the Character
+  -- stat boxes are (mw.CharacterStatsFrame).
+  local holder = CreateFrame("Frame", nil, state.chrome)
+  holder:SetAllPoints(state.chrome)
+  local level = mw.Dimension(state.chrome, "GetFrameLevel")
+  if level > 0 then pcall(holder.SetFrameLevel, holder, level) end
+  state.petStatsFrame = holder
+
+  local pad = token.pad
+  for c = 1, table.getn(rects) do
+    local rect = rects[c]
+    local box = CreateFrame("Frame", nil, holder)
+    if level > 0 then pcall(box.SetFrameLevel, box, level) end
+    box:SetPoint("TOPLEFT", holder, "TOPLEFT",
+                 math.floor(rect[1] - pad.left + 0.5),
+                 -math.floor(rect[2] - pad.top + 0.5))
+    box:SetWidth(math.floor(rect[3] - rect[1] + pad.left + pad.right + 0.5))
+    box:SetHeight(math.floor(rect[4] - rect[2] + pad.top + pad.bottom + 0.5))
+    local okFill, fill = pcall(box.CreateTexture, box, nil, "BACKGROUND")
+    if okFill and fill then
+      pcall(fill.SetTexture, fill, M.texture.plain)
+      pcall(fill.SetVertexColor, fill, M.Unpack(token.fill))
+      U.ModernWowThinBorderFill(fill, box, token.size)
+    end
+    U.ModernWowBuildThinBorder(box, token.size)
+  end
+
+  local ok, shown = pcall(page.IsShown, page)
+  if ok and not shown then holder:Hide() end
+end
+
+-- Drops the pet stat text `down` units (M.modernWow.petStatBoxes). The
+-- container moves, and so does any row anchored to something other than the
+-- container or another stat row, so a row is never shifted twice. Each shift
+-- starts from the captured stock points (mw.ShiftStockPoints), so repeating it
+-- on every show does not accumulate. The boxes are measured from the rows
+-- after this, so they follow the text wherever it lands.
+function mw.ShiftPetStats()
+  local token = M.modernWow.petStatBoxes
+  local dy = -(token.down or 0)
+  local container = token.container
+  local names = { [container] = true }
+  local c, i
+  for c = 1, table.getn(token.columns) do
+    for i = 1, table.getn(token.columns[c]) do
+      names[token.columns[c][i]] = true
+    end
+  end
+  mw.ShiftStockPoints(U.G(container), 0, dy)
+  for c = 1, table.getn(token.columns) do
+    for i = 1, table.getn(token.columns[c]) do
+      local row = U.G(token.columns[c][i])
+      local ok, _, relative = false, nil, nil
+      if row and row.GetPoint then
+        ok, _, relative = pcall(row.GetPoint, row, 1)
+      end
+      local relName
+      if ok and relative and relative.GetName then
+        local okName, value = pcall(relative.GetName, relative)
+        if okName then relName = value end
+      end
+      if row and ok and not (relName and names[relName]) then
+        mw.ShiftStockPoints(row, 0, dy)
+      end
+    end
+  end
+end
+
+function mw.PetStatBoxes(frame)
+  local state = frame and frame.puiModernWowWindow
+  local page = U.G("PetPaperDollFrame")
+  if not state or not state.chrome or not page or state.petStatsHooked then
+    return
+  end
+  state.petStatsHooked = true
+  local function Show()
+    mw.ShiftPetStats()
+    if not state.petStatsFrame then
+      -- Rows are anchored by the client's own show pass; measure after it.
+      U.DeferOnce("modernwow.pet-stat-boxes", function()
+        pcall(mw.BuildPetStatBoxes, frame, state, page)
+      end)
+    else
+      state.petStatsFrame:Show()
+    end
+  end
+  U.PostHookScript(page, "OnShow", Show)
+  U.PostHookScript(page, "OnHide", function()
+    if state.petStatsFrame then state.petStatsFrame:Hide() end
+  end)
+  local ok, shown = pcall(page.IsShown, page)
+  if ok and shown then Show() end
 end
 
 -- A unit's class icon inside the art's gold ring, from the same class-portrait

@@ -34,3 +34,14 @@ Copyright (c) 2006 Daniel Rehn
 The supplied EQL3 package did not include a separate license text. These files
 retain their original copyright and are not represented as original unrealUI
 artwork by the MIT license above. See media/Textures/classic-wow/questLog/ATTRIBUTION.md.
+
+
+================================================================================
+BUNDLED FLAT CLASS-ICON ARTWORK
+================================================================================
+
+The flat-*.tga class-icon sheets under media/Textures/class-icons/ come from the
+third-party FLATPLAYERICONS pack (a UI-Classes-Circles replacement). The pack
+names no author and includes no license text. These files retain their original
+ownership and are not represented as original pandaUI artwork by the MIT
+license above. See media/Textures/class-icons/ATTRIBUTION.md.

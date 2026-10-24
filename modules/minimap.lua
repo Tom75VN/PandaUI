@@ -181,13 +181,18 @@ local function DressModernWowMinimap()
   -- (DOCUMENTED_NOT_RUNTIME_VERIFIED) -- the same source UnrealPfUI's working
   -- zone panel uses. No zone event is verified here, so a throttled refresh
   -- is the guarantee and the events are only a faster path.
+  local artWidth = width + layout.topPanelRightOverhang
+  local visibleBandWidth = artWidth *
+    (layout.topPanelVisibleRight - layout.topPanelVisibleLeft) /
+    layout.topPanelTexWidth
   local zoneLabel = U.CreateLabel(panel, {
     name = "PandaUIModernWowMinimapZoneText",
     inherits = "GameFontNormal",
-    size = M.fontSize.normal,
+    size = layout.zoneFontSize,
     color = layout.zoneColor,
     justify = "CENTER",
-    width = width - layout.zoneX * 2,
+    width = visibleBandWidth - layout.zoneX * 2,
+    exactSize = true,
   })
   if zoneLabel then
     -- Vertically centre on the art's visible band, derived from the measured
@@ -196,7 +201,6 @@ local function DressModernWowMinimap()
     local bandCentreFromBottom = artHeight * (1 -
       (layout.topPanelVisibleTop + layout.topPanelVisibleBottom) /
       (2 * layout.topPanelTexHeight))
-    local artWidth = width + layout.topPanelRightOverhang
     local bandCentreX = artWidth *
       (layout.topPanelVisibleLeft + layout.topPanelVisibleRight) /
       (2 * layout.topPanelTexWidth)

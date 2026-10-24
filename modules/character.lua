@@ -15,6 +15,7 @@ local DIM   = { 0.60, 0.60, 0.60, 1.00 }
 
 local frame, panel, modernWowTabMode, toggleCharacterOriginal
 local StyleModel, RaiseResistancesAboveModel
+local petSummary = {}
 
 local SLOTS = {
   "HeadSlot", "NeckSlot", "ShoulderSlot", "BackSlot", "ChestSlot",
@@ -65,6 +66,532 @@ end
 
 local function SetTextFont(object, size, color)
   U.SetStockFont(object, size or M.fontSize.normal, color or WHITE)
+end
+
+function petSummary.Hide()
+  if petSummary.header then pcall(petSummary.header.Hide, petSummary.header) end
+  if petSummary.icon then pcall(petSummary.icon.Hide, petSummary.icon) end
+  petSummary.nativeLinesDropped = nil
+  if petSummary.trainingPoints then
+    pcall(petSummary.trainingPoints.Hide, petSummary.trainingPoints)
+  end
+  if type(U.SetModernWowPetHeaderOffset) == "function" then
+    U.SetModernWowPetHeaderOffset(false)
+  end
+  if type(U.SetModernWowPetHeaderText) == "function" then
+    U.SetModernWowPetHeaderText(nil)
+  end
+  local playerLevel = G("CharacterLevelText")
+  if playerLevel then pcall(playerLevel.Show, playerLevel) end
+end
+
+-- Where the native happiness icon (PetPaperDollPetInfo) sits, as a TOPLEFT
+-- offset inside the summary layer: PandaUI's icon takes its place and the
+-- native one is hidden (user request, 2026-10-20). Bounded numbers read once
+-- off the native frame, never an anchor to it (rules/pandaui.md, native
+-- widget ownership); a read that fails or lands outside the layer leaves nil
+-- and is retried next refresh.
+function petSummary.IconOffset()
+  if petSummary.iconOffset then return petSummary.iconOffset end
+  local button = G("PetPaperDollPetInfo")
+  local layer = petSummary.layer
+  if not button or not layer then return nil end
+
+  local ok, left, top, scale, layerLeft, layerTop, layerScale,
+        layerWidth, layerHeight = pcall(function()
+    return button:GetLeft(), button:GetTop(), button:GetEffectiveScale(),
+           layer:GetLeft(), layer:GetTop(), layer:GetEffectiveScale(),
+           layer:GetWidth(), layer:GetHeight()
+  end)
+  if not ok then return nil end
+  left, top, scale = tonumber(left), tonumber(top), tonumber(scale)
+  layerLeft, layerTop = tonumber(layerLeft), tonumber(layerTop)
+  layerScale = tonumber(layerScale)
+  layerWidth, layerHeight = tonumber(layerWidth), tonumber(layerHeight)
+  if not left or not top or not scale or not layerLeft or not layerTop or
+     not layerScale or layerScale <= 0 or not layerWidth or
+     not layerHeight then
+    return nil
+  end
+
+  local x = left * scale / layerScale - layerLeft
+  local y = top * scale / layerScale - layerTop
+  if x < 0 or x > layerWidth or y > 0 or -y > layerHeight then return nil end
+  petSummary.iconOffset = { x, y }
+  return petSummary.iconOffset
+end
+
+-- Lowers a native Classic pet-page line by `drop` from its own stock anchors,
+-- captured once, so repeated calls never accumulate -- the same recipe as
+-- ShiftClassicClassLine. Only the line's own points are restated; nothing
+-- addon-owned is anchored to it.
+function petSummary.DropNativeLine(text, drop)
+  if not text or type(text.GetNumPoints) ~= "function" or
+     type(text.GetPoint) ~= "function" then
+    return
+  end
+  local points = text.puiPetStockPoints
+  local i
+  if not points then
+    points = {}
+    local countOk, count = pcall(text.GetNumPoints, text)
+    count = countOk and tonumber(count) or 0
+    for i = 1, count do
+      local ok, point, relative, relativePoint, x, y =
+        pcall(text.GetPoint, text, i)
+      if ok and point then
+        table.insert(points, { point, relative, relativePoint,
+                               tonumber(x) or 0, tonumber(y) or 0 })
+      end
+    end
+    text.puiPetStockPoints = points
+  end
+  if table.getn(points) == 0 then return end
+  pcall(function()
+    text:ClearAllPoints()
+    for i = 1, table.getn(points) do
+      local point = points[i]
+      text:SetPoint(point[1], point[2], point[3], point[4], point[5] - drop)
+    end
+  end)
+end
+
+-- Whether a native line hangs off PetLevelText, and so moves with it. Read by
+-- name: GetPoint can hand back a fresh wrapper, never == the global.
+function petSummary.FollowsPetLevel(text)
+  if not text or type(text.GetPoint) ~= "function" then return false end
+  local ok, _, relative = pcall(text.GetPoint, text, 1)
+  if not ok or not relative or type(relative.GetName) ~= "function" then
+    return false
+  end
+  local nameOk, name = pcall(relative.GetName, relative)
+  return nameOk and name == "PetLevelText"
+end
+
+-- The native happiness tooltip on the shared GameTooltip (user request,
+-- 2026-10-20; a sanctioned addon use, as the XP bar's): the mood name, the
+-- damage and loyalty lines the pet unit frame shows, then the pet page's diet
+-- line. Every string is the client's own global (PET_HAPPINESS<n>,
+-- PET_DAMAGE_PERCENTAGE, GAINING_/LOSING_LOYALTY, PET_DIET_TEMPLATE), and a
+-- missing one drops only its line. Colours match the native tooltips in the
+-- user's screenshots: gold title and diet, cyan damage and loyalty.
+-- GetPetHappiness's second and third returns (damage %, loyalty rate) and
+-- GetPetFoodTypes are OFFICIAL_CLIENT_DOCUMENTATION / vanilla-shaped, not
+-- runtime-verified; each is tonumber/type guarded.
+function petSummary.ShowTooltip()
+  local icon = petSummary.icon
+  local tip = G("GameTooltip")
+  if not icon or not tip then return end
+
+  local happiness, damage, loyaltyRate
+  local getHappiness = G("GetPetHappiness")
+  if type(getHappiness) == "function" then
+    local ok, a, b, c = pcall(getHappiness)
+    if ok then
+      happiness, damage, loyaltyRate = tonumber(a), tonumber(b), tonumber(c)
+    end
+  end
+  local title = happiness and G("PET_HAPPINESS" .. happiness)
+  if type(title) ~= "string" then return end
+
+  local diet
+  local getFood = G("GetPetFoodTypes")
+  local template = G("PET_DIET_TEMPLATE")
+  if type(getFood) == "function" and type(template) == "string" then
+    local ok, a1, a2, a3, a4, a5, a6 = pcall(getFood)
+    if ok then
+      local list, values, i = {}, { a1, a2, a3, a4, a5, a6 }, nil
+      for i = 1, 6 do
+        if type(values[i]) == "string" and values[i] ~= "" then
+          table.insert(list, values[i])
+        end
+      end
+      if table.getn(list) > 0 then
+        diet = string.format(template, table.concat(list, ", "))
+      end
+    end
+  end
+
+  pcall(function()
+    tip:SetOwner(icon, "ANCHOR_RIGHT")
+    tip:ClearLines()
+    tip:AddLine(title, 1, 0.82, 0)
+    local damageTemplate = G("PET_DAMAGE_PERCENTAGE")
+    if damage and type(damageTemplate) == "string" then
+      tip:AddLine(string.format(damageTemplate, damage), 0, 1, 1)
+    end
+    local loyalty
+    if loyaltyRate and loyaltyRate < 0 then
+      loyalty = G("LOSING_LOYALTY")
+    elseif loyaltyRate and loyaltyRate > 0 then
+      loyalty = G("GAINING_LOYALTY")
+    end
+    if type(loyalty) == "string" then tip:AddLine(loyalty, 0, 1, 1) end
+    if diet then tip:AddLine(diet, 1, 0.82, 0) end
+    tip:Show()
+  end)
+end
+
+function petSummary.HideTooltip()
+  local tip = G("GameTooltip")
+  if tip then pcall(tip.Hide, tip) end
+end
+
+-- The flat Modern page: an addon panel without the Modern WoW surface.
+function petSummary.FlatModern()
+  return panel and not modernWowTabMode and true or false
+end
+
+function petSummary.Layout()
+  local row = petSummary.header
+  if not row then return end
+
+  local width, previous = 0, nil
+  local function Place(object, shown, gap, y)
+    if not object then return end
+    if not shown then
+      pcall(object.Hide, object)
+      return
+    end
+
+    pcall(function()
+      object:ClearAllPoints()
+      object:SetPoint("LEFT", row, "LEFT",
+                      width + (previous and gap or 0), y or 0)
+      object:Show()
+    end)
+
+    local objectWidth = 0
+    if object.GetStringWidth then
+      local ok, value = pcall(object.GetStringWidth, object)
+      if ok then objectWidth = tonumber(value) or 0 end
+    elseif object.GetWidth then
+      local ok, value = pcall(object.GetWidth, object)
+      if ok then objectWidth = tonumber(value) or 0 end
+    end
+    if previous then width = width + gap end
+    width = width + objectWidth
+    previous = object
+  end
+
+  Place(petSummary.level, petSummary.levelVisible, 0, -11)
+  if petSummary.levelVisible and petSummary.level then
+    pcall(petSummary.level.ClearAllPoints, petSummary.level)
+    if petSummary.FlatModern() then
+      -- Flat Modern: the two lines take the hidden pet name's place as the
+      -- page heading, in accent (user request, 2026-10-20).
+      pcall(petSummary.level.SetPoint, petSummary.level,
+            "TOP", petSummary.layer, "TOP", 0, -10)
+    else
+      pcall(petSummary.level.SetPoint, petSummary.level,
+            "CENTER", row, "CENTER", 0, -11)
+    end
+  end
+  local color = petSummary.FlatModern() and M.color.accent or WHITE
+  if petSummary.level then
+    pcall(petSummary.level.SetTextColor, petSummary.level, M.Unpack(color))
+  end
+  if petSummary.loyalty then
+    pcall(petSummary.loyalty.SetTextColor, petSummary.loyalty, M.Unpack(color))
+  end
+
+  -- The happiness icon sits where the native one does (user request,
+  -- 2026-10-20). Until that spot can be measured it stays beside the
+  -- header's first line, as before.
+  local icon = petSummary.icon
+  if icon then
+    local offset = petSummary.IconOffset()
+    -- The native icon is hidden in every theme: on this client it stayed on
+    -- its green (Happy) cell while GetPetHappiness and the pet unit frame
+    -- read Unhappy, and its tooltip carried only the diet line (user
+    -- screenshots, 2026-10-20), so the page was never updating it.
+    local native = G("PetPaperDollPetInfo")
+    if native then pcall(native.Hide, native) end
+    if not petSummary.iconVisible or
+       (not offset and not petSummary.levelVisible) then
+      pcall(icon.Hide, icon)
+    else
+      pcall(function()
+        icon:ClearAllPoints()
+        if offset then
+          -- Above the native spot by the same lift in every theme (user
+          -- requests, 2026-10-20).
+          icon:SetPoint("TOPLEFT", petSummary.layer, "TOPLEFT",
+                        offset[1], offset[2] + M.petHappiness.pageLift)
+        else
+          icon:SetPoint("LEFT", petSummary.level, "RIGHT", 16, 8)
+        end
+        icon:Show()
+      end)
+    end
+  end
+  local loyalty = petSummary.loyalty
+  if loyalty then
+    if petSummary.loyaltyVisible and petSummary.levelVisible then
+      pcall(function()
+        loyalty:ClearAllPoints()
+        loyalty:SetPoint("TOP", petSummary.level, "BOTTOM", 0, -2)
+        loyalty:Show()
+      end)
+    else
+      pcall(loyalty.Hide, loyalty)
+    end
+  end
+  pcall(row.SetWidth, row, math.max(1, width))
+  if previous then pcall(row.Show, row) else pcall(row.Hide, row) end
+end
+
+function petSummary.Build()
+  local parent = panel or frame
+  if petSummary.built or not parent then return end
+  petSummary.built = true
+
+  local ok, layer = pcall(CreateFrame, "Frame",
+                          "PandaUICharacterPetSummary", parent)
+  if not ok or not layer then return end
+  petSummary.layer = layer
+  pcall(layer.SetAllPoints, layer, parent)
+  pcall(layer.EnableMouse, layer, false)
+  if parent.GetFrameLevel then
+    local levelOk, level = pcall(parent.GetFrameLevel, parent)
+    if levelOk and tonumber(level) then
+      pcall(layer.SetFrameLevel, layer, level + 20)
+    end
+  end
+
+  local header = CreateFrame("Frame", nil, layer)
+  header:SetWidth(1)
+  header:SetHeight(M.petHappiness.size)
+  header:SetPoint("TOP", layer, "TOP",
+                  panel and (PANEL_INSET_RIGHT - PANEL_INSET_LEFT) / 2 or 0,
+                  panel and -30 or -12)
+  pcall(header.EnableMouse, header, false)
+  petSummary.header = header
+
+  petSummary.level = U.CreateLabel(header, {
+    name = "PandaUICharacterPetLevel",
+    size = M.fontSize.small,
+    color = WHITE,
+    justify = "CENTER",
+    inherits = "GameFontHighlight",
+  })
+
+  -- Second line where the themed header does not take the pet level itself
+  -- (classic-wow, modern): the native loyalty text under the level line.
+  petSummary.loyalty = U.CreateLabel(header, {
+    name = "PandaUICharacterPetLoyalty",
+    size = M.fontSize.small,
+    color = WHITE,
+    justify = "CENTER",
+    inherits = "GameFontHighlight",
+  })
+
+  -- On the layer rather than the header: it is placed at the model's corner
+  -- (petSummary.Layout), and shows even when the header has no line.
+  local icon = CreateFrame("Frame", nil, layer)
+  icon:SetWidth(M.petHappiness.size)
+  icon:SetHeight(M.petHappiness.size)
+  -- Takes the mouse only for its tooltip; it has no click.
+  pcall(icon.EnableMouse, icon, true)
+  pcall(icon.SetScript, icon, "OnEnter", petSummary.ShowTooltip)
+  pcall(icon.SetScript, icon, "OnLeave", petSummary.HideTooltip)
+  local fill = icon:CreateTexture(nil, "ARTWORK")
+  fill:SetTexture(M.texture.petHappiness)
+  fill:SetAllPoints(icon)
+  icon.fill = fill
+  petSummary.icon = icon
+
+  petSummary.trainingPoints = U.CreateLabel(layer, {
+    name = "PandaUICharacterPetTrainingPoints",
+    size = M.fontSize.small,
+    color = WHITE,
+    justify = "CENTER",
+    inherits = "GameFontHighlight",
+  })
+  if petSummary.trainingPoints then
+    pcall(petSummary.trainingPoints.SetPoint, petSummary.trainingPoints,
+          "BOTTOM", layer, "BOTTOM", 0,
+          panel and 24 or M.classicWow.petTab.trainingPointsBottom)
+  end
+
+  pcall(header.Hide, header)
+  if petSummary.trainingPoints then
+    pcall(petSummary.trainingPoints.Hide, petSummary.trainingPoints)
+  end
+end
+
+-- Fits the pet experience fill inside the bar's own segmented frame, under
+-- every theme (M.petExpBar). Only while that frame is still drawn: the Modern
+-- skin strips it (StylePetTab, hooked first) and draws the bar's flat outline
+-- around the fill instead, which already fits. The frame texture is hung off
+-- its own bar -- a native-to-native anchor, read by global name each pass and
+-- never retained -- and the bar keeps its native anchor; only its height
+-- changes. Idempotent, so it runs on every page show.
+function petSummary.FitExpBar()
+  local token = M.petExpBar
+  local bar = G("PetPaperDollFrameExpBar")
+  local art = token and G(token.art)
+  if not bar or not art then return end
+  local okShown, shown = pcall(art.IsShown, art)
+  local okAlpha, alpha = pcall(art.GetAlpha, art)
+  local okPath, path = pcall(art.GetTexture, art)
+  if not (okShown and shown and okAlpha and (tonumber(alpha) or 0) > 0 and
+          okPath and path) then
+    return
+  end
+  pcall(function()
+    bar:SetHeight(token.channel)
+    art:ClearAllPoints()
+    art:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, token.artTop)
+  end)
+end
+
+function petSummary.Install()
+  if petSummary.installed then return end
+  petSummary.installed = true
+
+  local pet = G("PetPaperDollFrame")
+  U.PostHookScript(pet, "OnShow", petSummary.FitExpBar)
+  U.PostHookScript(pet, "OnShow", petSummary.Refresh)
+  U.PostHookScript(pet, "OnHide", petSummary.Hide)
+  U.RegisterUpdate("character.pet-summary", 0.25, function()
+    if not frame or not frame.IsShown then return end
+    local ok, shown = pcall(frame.IsShown, frame)
+    if ok and shown then petSummary.Refresh() end
+  end)
+  petSummary.FitExpBar()
+  petSummary.Refresh()
+end
+
+function petSummary.Refresh()
+  petSummary.Build()
+
+  local visible = false
+  -- CharacterFrame owns the native page selection; Pet is tab 2. Keep the
+  -- child-frame check as a fallback for the complete styled drawing paths.
+  if frame and frame.IsShown then
+    local ok, shown = pcall(frame.IsShown, frame)
+    visible = ok and shown and tonumber(frame.selectedTab) == 2
+  end
+  if not visible then
+    local pet = G("PetPaperDollFrame")
+    if pet and pet.IsShown then
+      local ok, shown = pcall(pet.IsShown, pet)
+      visible = ok and shown and true or false
+    end
+  end
+  if not visible then
+    petSummary.Hide()
+    return
+  end
+  if type(U.SetModernWowPetHeaderOffset) == "function" then
+    U.SetModernWowPetHeaderOffset(true)
+  end
+
+  -- These reads are documented by this client but remain runtime-unverified.
+  local getHappiness = G("GetPetHappiness")
+  local happiness
+  if type(getHappiness) == "function" then
+    local ok, value = pcall(getHappiness)
+    if ok then happiness = tonumber(value) end
+  end
+
+  local cell = happiness and M.petHappiness.cells[happiness]
+  petSummary.iconVisible = cell and true or false
+  if petSummary.iconVisible and petSummary.icon and petSummary.icon.fill then
+    pcall(petSummary.icon.fill.SetTexCoord, petSummary.icon.fill,
+          cell[1], cell[2], cell[3], cell[4])
+  end
+
+  -- Both lines mirror the client's own text, so they read exactly as the
+  -- native pet page does: PetLevelText "Level <n> <family>" and
+  -- PetLoyaltyText "(Loyalty Level <n>) <rank>" (native screenshot,
+  -- 2026-10-20; GetPetLoyalty alone is documented as the rank name only).
+  local function StockText(object)
+    if not object or not object.GetText then return nil end
+    local ok, value = pcall(object.GetText, object)
+    if ok and type(value) == "string" and value ~= "" then return value end
+  end
+  local stockLevel = G("PetLevelText")
+  local stockLoyalty = G("PetLoyaltyText")
+  local levelText = StockText(stockLevel)
+  local loyaltyText = StockText(stockLoyalty)
+
+  -- Every theme shows the pet level where the player's class/level line was,
+  -- with the loyalty line under it (user requests, 2026-10-20). Modern WoW's
+  -- themed header line takes the level itself, so this row carries loyalty;
+  -- flat Modern draws both lines on this row. Classic WoW (native chrome, no
+  -- addon panel) keeps the client's own two lines, which the native layout
+  -- already places inside its header: the addon copies sat 12 units from the
+  -- frame top and crossed the header's rim (user screenshot, 2026-10-20).
+  local rowText, secondText = levelText, loyaltyText
+  if not panel then
+    rowText, secondText = nil, nil
+    if stockLevel then pcall(stockLevel.Show, stockLevel) end
+    if stockLoyalty then pcall(stockLoyalty.Show, stockLoyalty) end
+    -- Lowered to centre in the header band (user request, 2026-10-20);
+    -- once per tab visit, since the shift restates captured stock points.
+    if not petSummary.nativeLinesDropped then
+      petSummary.nativeLinesDropped = true
+      local drop = M.classicWow.petTab.headerDrop
+      petSummary.DropNativeLine(stockLevel, drop)
+      if not petSummary.FollowsPetLevel(stockLoyalty) then
+        petSummary.DropNativeLine(stockLoyalty, drop)
+      end
+    end
+  else
+    if stockLevel then pcall(stockLevel.Hide, stockLevel) end
+    if stockLoyalty then pcall(stockLoyalty.Hide, stockLoyalty) end
+    -- Flat Modern drops the pet name heading; the level/loyalty lines take
+    -- its place (petSummary.Layout).
+    if petSummary.FlatModern() then
+      local name = G("PetNameText")
+      if name then pcall(name.Hide, name) end
+    end
+    if levelText and type(U.SetModernWowPetHeaderText) == "function" and
+       U.SetModernWowPetHeaderText(levelText) then
+      rowText, secondText = loyaltyText, nil
+    end
+  end
+  petSummary.levelVisible = petSummary.level and rowText and true or false
+  if petSummary.levelVisible then
+    pcall(petSummary.level.SetText, petSummary.level, rowText)
+  end
+  petSummary.loyaltyVisible = petSummary.loyalty and secondText and true or false
+  if petSummary.loyaltyVisible then
+    pcall(petSummary.loyalty.SetText, petSummary.loyalty, secondText)
+  end
+  local playerLevel = G("CharacterLevelText")
+  if playerLevel then pcall(playerLevel.Hide, playerLevel) end
+
+  -- Training points are the native PetTrainingPointText too: the first
+  -- return of GetPetTrainingPoints alone read 65535 (shown as -1) where the
+  -- native page showed 42 (player screenshot, 2026-10-20), because the page
+  -- prints total minus spent. Without the native text, the same formula.
+  local trainingPoints = tonumber(StockText(G("PetTrainingPointText")))
+  if not trainingPoints then
+    local getTrainingPoints = G("GetPetTrainingPoints")
+    if type(getTrainingPoints) == "function" then
+      local ok, total, spent = pcall(getTrainingPoints)
+      total, spent = tonumber(total), tonumber(spent)
+      if ok and total and spent then trainingPoints = total - spent end
+    end
+  end
+
+  petSummary.trainingPointsVisible = petSummary.trainingPoints and
+                                     trainingPoints ~= nil
+  if petSummary.trainingPointsVisible then
+    pcall(petSummary.trainingPoints.SetText, petSummary.trainingPoints,
+          U.L("CHARACTER_PET_TRAINING_POINTS", trainingPoints))
+    local stockLabel = G("PetTrainingPointLabel")
+    local stockValue = G("PetTrainingPointText")
+    if stockLabel then pcall(stockLabel.Hide, stockLabel) end
+    if stockValue then pcall(stockValue.Hide, stockValue) end
+    pcall(petSummary.trainingPoints.Show, petSummary.trainingPoints)
+  elseif petSummary.trainingPoints then
+    pcall(petSummary.trainingPoints.Hide, petSummary.trainingPoints)
+  end
+  petSummary.Layout()
 end
 
 -- The equipped item's quality index, or nil when this client will not report
@@ -438,22 +965,36 @@ end
 -- client does not push a SetFrameLevel down to existing children, so an earlier
 -- pass that raised CharacterResistanceFrame to level 9 left the five frames
 -- that actually take the mouse still sitting at 4.
+-- The Pet tab's resistance column overlaps its own model the same way, so its
+-- frames (PetMagicResFrame1-5, native 1.12 names, G()-guarded) are raised
+-- above the pet catcher by the same rule. The happiness icon needs no raise:
+-- PandaUI's own sits on the summary layer, 20 levels above the page.
 RaiseResistancesAboveModel = function()
-  local catcher = G("PandaUICharacterModelRotateCatcher")
-  if not catcher then return end
+  local function Raise(catcherName, names)
+    local catcher = G(catcherName)
+    if not catcher then return end
 
-  local strataOk, strata = pcall(catcher.GetFrameStrata, catcher)
-  local levelOk, level = pcall(catcher.GetFrameLevel, catcher)
-  level = levelOk and tonumber(level) or nil
+    local strataOk, strata = pcall(catcher.GetFrameStrata, catcher)
+    local levelOk, level = pcall(catcher.GetFrameLevel, catcher)
+    level = levelOk and tonumber(level) or nil
 
-  local i
-  for i = 1, 5 do
-    local res = G("MagicResFrame" .. i)
-    if res then
-      if strataOk and strata then pcall(res.SetFrameStrata, res, strata) end
-      if level then pcall(res.SetFrameLevel, res, level + 5) end
+    local i
+    for i = 1, table.getn(names) do
+      local res = G(names[i])
+      if res then
+        if strataOk and strata then pcall(res.SetFrameStrata, res, strata) end
+        if level then pcall(res.SetFrameLevel, res, level + 5) end
+      end
     end
   end
+  Raise("PandaUICharacterModelRotateCatcher", {
+    "MagicResFrame1", "MagicResFrame2", "MagicResFrame3", "MagicResFrame4",
+    "MagicResFrame5",
+  })
+  Raise("PandaUIPetModelRotateCatcher", {
+    "PetMagicResFrame1", "PetMagicResFrame2", "PetMagicResFrame3",
+    "PetMagicResFrame4", "PetMagicResFrame5",
+  })
 end
 
 local function StyleResistances()
@@ -501,6 +1042,16 @@ StyleModel = function()
     ticker = "character.model-rotate",
     leftButton = G("CharacterModelFrameRotateLeftButton"),
     rightButton = G("CharacterModelFrameRotateRightButton"),
+  })
+  -- The Pet tab's model gets the same click-drag rotation in every theme
+  -- (user request, 2026-10-20). PetModelFrame and its rotate buttons are the
+  -- native 1.12 names; the buttons resolved here before (they took the flat
+  -- arrows), the model itself is G()-guarded so a missing name skips it.
+  U.EnableStockModelDrag(G("PetModelFrame"), {
+    name = "PandaUIPetModelRotateCatcher",
+    ticker = "character.pet-model-rotate",
+    leftButton = G("PetModelFrameRotateLeftButton"),
+    rightButton = G("PetModelFrameRotateRightButton"),
   })
 end
 
@@ -1544,14 +2095,8 @@ local function StylePetTab()
   local close = G("PetPaperDollCloseButton")
   if close then pcall(close.Hide, close) end
 
-  -- Unlike the Character page these keep working rather than being replaced by
-  -- a click-rotate catcher: that catcher is a single confirmed instance bound
-  -- to CharacterModelFrame, and duplicating it here would mean rebuilding a
-  -- USER_CONFIRMED_INGAME drag path against an unprobed second model frame.
-  -- Flat arrows with owned glyphs satisfy the native-texture policy and leave
-  -- the rotation intact.
-  U.StyleStockArrowButton(G("PetModelFrameRotateLeftButton"), "left", 16)
-  U.StyleStockArrowButton(G("PetModelFrameRotateRightButton"), "right", 16)
+  -- The rotate buttons are replaced by click-drag rotation, as on the
+  -- Character page (StyleModel; user request, 2026-10-20).
 
   local attributes = G("PetAttributesFrame")
   if attributes then
@@ -1563,6 +2108,7 @@ local function StylePetTab()
   SetTextFont(G("PetArmorFrameText"), M.fontSize.small, WHITE)
   SetTextFont(G("PetTrainingPointLabel"), M.fontSize.small, DIM)
   SetTextFont(G("PetTrainingPointText"), M.fontSize.small, WHITE)
+  petSummary.Refresh()
 
   -- Happiness/loyalty/diet. Stripped of its frame art; the icon itself is
   -- meaningful content imagery and is left alone.
@@ -1576,6 +2122,10 @@ local function StylePetTab()
   -- and the fail-closed branch rather than a local strip here.
   local bar = G("PetPaperDollFrameExpBar")
   if bar then
+    if panel then
+      pcall(bar.ClearAllPoints, bar)
+      pcall(bar.SetPoint, bar, "BOTTOM", panel, "BOTTOM", 0, 10)
+    end
     local styled = U.StyleStockStatusBar(bar, { color = M.color.xp })
     if not styled then
       U.Debug("character: pet exp bar fill not found, left native")
@@ -1639,6 +2189,7 @@ local function Reapply()
   StyleSlots()
   StyleResistances()
   StyleAttributes()
+  petSummary.Refresh()
 end
 
 local function CharacterDragControls()
@@ -1819,10 +2370,12 @@ function CH:OnEnable()
         headerLevelOffset = 100,
         interactiveFrames = CharacterDragControls(),
       })
+      petSummary.Install()
     end
     return
   end
   if not BuildFrame() then return end
+  petSummary.Install()
   InstallModernWowCharacterToggle()
 
   -- Modern shares the complete paper-doll feature set with Modern WoW, but
@@ -1857,6 +2410,9 @@ function CH:OnEnable()
   U.RegisterEvent("UNIT_PET", function()
     if not frame or not frame.IsShown then return end
     local ok, shown = pcall(frame.IsShown, frame)
-    if ok and shown then LayoutTabs() end
+    if ok and shown then
+      LayoutTabs()
+      petSummary.Refresh()
+    end
   end)
 end

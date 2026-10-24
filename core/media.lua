@@ -180,6 +180,20 @@ M.texture = {
   fullscreenOutOfControl = "Interface\\AddOns\\pandaUI\\media\\Textures\\fullscreen\\out-of-control",
 }
 
+M.petHappiness = {
+  size = 24,
+  -- Pet tab (modules/character.lua, petSummary): how far PandaUI's icon sits
+  -- above the native PetPaperDollPetInfo spot it is placed from. Set by eye
+  -- on the Classic WoW page and applied to every theme so all three match
+  -- (user requests, 2026-10-20); not an art measurement.
+  pageLift = 27,
+  cells = {
+    [1] = { 48 / 128, 72 / 128, 0, 24 / 64 },
+    [2] = { 24 / 128, 48 / 128, 0, 24 / 64 },
+    [3] = { 0, 24 / 128, 0, 24 / 64 },
+  },
+}
+
 -- ---------------------------------------------------------------------------
 -- Extended Quest Log parchment (Classic WoW theme only)
 --
@@ -235,6 +249,17 @@ M.minimapMail = {
 
 M.classicWow = {}
 M.classicWow.path = "Interface\\AddOns\\pandaUI\\media\\Textures\\classic-wow\\questLog\\"
+
+-- Classic Pet tab (modules/character.lua, petSummary). All are PandaUI's
+-- choice, set by eye from user screenshots (2026-10-20), not art
+-- measurements: `headerDrop` lowers the native level/loyalty lines so they
+-- centre in the header band, and `trainingPointsBottom` is the
+-- training-points line's offset above the window's bottom edge. The
+-- happiness icon's lift is shared by every theme (M.petHappiness.pageLift).
+M.classicWow.petTab = {
+  headerDrop = 6,
+  trainingPointsBottom = 84,
+}
 
 -- Compact Classic target-of-target housing (modules/unitframes.lua). This is
 -- the player-facing slice of the client's UI-TargetingFrame atlas, not
@@ -961,6 +986,7 @@ M.modernWow.minimap = {
   topPanelVisibleRight = 249,
   topPanelVisibleTop = 2,
   topPanelVisibleBottom = 37,
+  zoneFontSize = M.fontSize.normal - 3,
   zoneX = 4,
   zoneY = 6,  -- nudge above the band centre (positive = up)
   zoneHeight = 20,
@@ -1990,7 +2016,7 @@ M.modernWow.spellBook = {
   pageTextColor = { 1.00, 1.00, 1.00, 1.00 },
   -- Every spell name, passive and racial included: the client dims passive
   -- names, which the user asked to draw like the rest (2026-09-13).
-  spellNameColor = { 1.00, 0.82, 0.00, 1.00 },
+  spellNameColor = { 1.00, 1.00, 1.00, 1.00 },
   -- The hover glow every active spell uses; passives otherwise get their own.
   spellHighlight = "Interface\\Buttons\\ButtonHilight-Square",
 }
@@ -3310,6 +3336,27 @@ M.modernWow.statBoxes = {
   statsRect = { left = 67, top = 291, width = 230, height = 78 },
 }
 
+-- Pet tab stat columns, each framed by the ThinBorder rim (user request,
+-- 2026-10-20) in place of the stock group boxes PandaUI strips. A box is the
+-- union of its column's row frames -- names from OctoWoW's own
+-- PetPaperDollFrame.xml, geometry read at runtime -- grown by `pad`. `size` is the rim's drawn
+-- piece size; `fill` sits inside the rim's line (U.ModernWowThinBorderFill).
+M.modernWow.petStatBoxes = {
+  columns = {
+    { "PetStatFrame1", "PetStatFrame2", "PetStatFrame3", "PetStatFrame4",
+      "PetStatFrame5" },
+    { "PetAttackFrame", "PetAttackPowerFrame", "PetDamageFrame",
+      "PetDefenseFrame", "PetArmorFrame" },
+  },
+  pad = { left = 6, top = 5, right = 6, bottom = 5 },
+  -- Units the stat text drops from its stock place, boxes following it (user
+  -- requests, 2026-10-20: 10, then 6 more). `container` holds the rows.
+  down = 16,
+  container = "PetAttributesFrame",
+  size = 16,
+  fill = { 0, 0, 0, 0.5 },
+}
+
 -- Attribute value FontStrings (Strength, Agility, Stamina, Intellect, Spirit,
 -- Armor) shifted by `valueShift`. The names are the stock FrameXML globals,
 -- present in this client's global dump
@@ -4450,6 +4497,26 @@ M.modernWow.classCell = {
   DEATHKNIGHT = { 0.25,       0.50,       0.50, 0.75 },
 }
 
+-- Optional class-icon portraits on the player and target frames, every theme
+-- (U.db.portraitClassIcon, modules/unitframes.lua). U.db.portraitClassIconStyle
+-- stores the index into `order`, never the name. Each style is a full
+-- 256x256 UI-Classes-Circles replacement in the same CLASS_ICON_TCOORDS order,
+-- so all of them share M.modernWow.classCell. "blizzard" is the stock class
+-- circle art already shipped for the Modern WoW fallback; the flat sheets are
+-- documented in media/Textures/class-icons/ATTRIBUTION.md.
+M.classIcon = {
+  path = "Interface\\AddOns\\pandaUI\\media\\Textures\\class-icons\\",
+  order = { "blizzard", "flatClassColor", "flatDark", "flatLight",
+            "flatMonochrome" },
+}
+M.classIcon.texture = {
+  blizzard       = M.modernWow.texture.classPortraits,
+  flatClassColor = M.classIcon.path .. "flat-class-color",
+  flatDark       = M.classIcon.path .. "flat-dark",
+  flatLight      = M.classIcon.path .. "flat-light",
+  flatMonochrome = M.classIcon.path .. "flat-monochrome",
+}
+
 -- The source interface's own unit-frame layout, as fractions of the 256x128
 -- frame art. Taken from DragonflightUI's player module, which positions its
 -- bars at fixed pixel offsets inside that art rather than stretching them to a
@@ -5301,6 +5368,17 @@ M.tab = {
 -- Modern-WoW paper doll (stats, titles, equipment sets and slot flyouts), but
 -- every surface here is from PandaUI's flat component family. No token in
 -- this table points at the Modern-WoW media tree.
+-- Pet tab experience bar, every theme (user request, 2026-10-20). Where the
+-- client still draws the bar's own segmented frame (PetPaperDollXPBar1 plus
+-- its unnamed second half anchored to it: UI-MainMenuBar-Dwarf, 13 units
+-- high, as in OctoWoW's own PetPaperDollFrame.xml), the fill ran the bar's
+-- full height and showed above the frame's top rim. The bar is cut to the
+-- frame's inner channel and the frame hung `artTop` units above it. Both
+-- numbers come from UnrealUI 0.11.0, measured off an Unreal Azeroth screenshot
+-- of the same art (~1.65 px/unit): top rim to texel 3, bottom rim from texel
+-- 10.3. Not yet confirmed on OctoWoW.
+M.petExpBar = { art = "PetPaperDollXPBar1", artTop = 3, channel = 7 }
+
 M.characterModern = {
   window = {
     left = 10, top = 10, width = 344, expandedWidth = 642, height = 430,

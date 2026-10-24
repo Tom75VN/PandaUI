@@ -88,6 +88,22 @@ local function SetSpellFont(object, size, color)
   U.SetStockFont(object, size or M.fontSize.normal, color or SPELL_WHITE)
 end
 
+-- Spell names get a half-unit bottom-right shadow (user request 2026-10-25).
+-- The offset is in UI units, as SetShadowOffset takes it; U.SetTextShadow
+-- expects physical pixels, so convert and opt out of its whole-pixel rounding.
+local SPELL_NAME_SHADOW = 0.5
+
+local function SetSpellNameShadow(object)
+  if not object then return end
+  local scale = U.PixelScale()
+  pcall(U.SetTextShadow, object, {
+    SPELL_NAME_SHADOW * scale, -SPELL_NAME_SHADOW * scale, exact = true,
+  })
+end
+
+-- Shared with modules/spellbookmodernwow.lua, which restyles the same names.
+U.SetSpellNameShadow = SetSpellNameShadow
+
 local function SpellCount()
   return tonumber(G("SPELLS_PER_PAGE")) or 12
 end
@@ -146,8 +162,9 @@ local function StyleSpellButton(index, refreshOnly)
     U.StyleStockButton(button, { icon = icon })
   end
 
-  SetSpellFont(G("SpellButton" .. index .. "SpellName"),
-               M.fontSize.normal, SPELL_GOLD)
+  local spellName = G("SpellButton" .. index .. "SpellName")
+  SetSpellFont(spellName, M.fontSize.normal, SPELL_GOLD)
+  SetSpellNameShadow(spellName)
   SetSpellFont(G("SpellButton" .. index .. "SubSpellName"),
                M.fontSize.small, SPELL_WHITE)
 

@@ -1,17 +1,27 @@
 -- pandaUI :: modules/stancebar.lua
 --
 -- The class stance bar the client draws for a Warrior (Battle/Defensive/
--- Berserker Stance) and for a Rogue (Stealth), rebuilt as an pandaUI bar with
--- its own mover. It follows the active theme exactly as the action bars do:
+-- Berserker Stance), a Rogue (Stealth) and a Druid (forms), rebuilt as an
+-- pandaUI bar with its own mover. It follows the active theme exactly as the action bars do:
 -- Modern draws the flat pandaUI button, Classic borrows the live client's own
 -- action-button faces through modules/actionbar.lua's shared Classic helpers,
 -- so a stance button always matches the action buttons sitting next to it.
 --
--- The class list is deliberate, per .claude/rules/pandaui.md ("a feature
--- existing in pfUI is not sufficient reason to add it to PandaUI"): only the
--- classes actually asked for get a bar. For every other class this module
--- creates nothing, suppresses nothing and registers no mover, so the client's
--- own shapeshift bar is left exactly as it is.
+-- The class list is deliberate (.claude/rules/pandaui.md: "do not silently
+-- add action bars"): Warrior and Rogue were asked for. Druid is here because
+-- the client's own ShapeshiftBarFrame is a child of MainMenuBar
+-- (octo-framexml BonusActionBarFrame.xml:209), which modules/actionbar.lua
+-- suppresses outside native-main-bar Classic -- without this bar a Druid would
+-- lose the form buttons the stock client gives them (knowledge.json /
+-- actionbars.druid_shapeshift_bar_hidden_with_mainmenubar). For every other
+-- class this module creates nothing, suppresses nothing and registers no
+-- mover, so the client's own shapeshift bar is left exactly as it is.
+--
+-- Druid notes: no forms before level 10 (the bar stays hidden until one is
+-- learned, unless the interface is unlocked); the count grows with level and
+-- with talent forms (Moonkin, Octo's Tree of Life), which the
+-- UPDATE_SHAPESHIFT_FORMS handler and the slot sweep pick up. Form paging of
+-- the main bar stays in modules/actionbar.lua (CLASS_RESERVED_PAGES).
 --
 -- Compatibility notes that shaped this file:
 --
@@ -76,6 +86,7 @@ local MAX_SLOTS = 10 -- native ShapeshiftButton1-10; no supported class fills it
 local SUPPORTED_CLASSES = {
   WARRIOR = 3, -- Battle / Defensive / Berserker Stance
   ROGUE   = 1, -- Stealth
+  DRUID   = 5, -- Bear / Aquatic / Cat / Travel / Moonkin or Tree of Life
 }
 
 local COLOR = {

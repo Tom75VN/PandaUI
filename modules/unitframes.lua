@@ -1886,6 +1886,7 @@ function model3d.ClassicBox(frame)
   pcall(background.SetTexCoord, background, 0, 1, 0, 1)
   pcall(background.Hide, background)
   box.puiClassicPortraitBackground = background
+  box.puiClassicFullSize = backgroundSize
   box.puiClassicPortrait = true
   box.puiInnerSize = size
   local levelOk, nativeLevel = pcall(native.GetFrameLevel, native)
@@ -1925,6 +1926,94 @@ function model3d.SetClassicBackgroundShown(box, shown)
   if not background then return end
   if shown then pcall(background.Show, background)
   else pcall(background.Hide, background) end
+end
+
+-- ---------------------------------------------------------------------------
+-- Optional class-icon portrait (U.db.portraitClassIcon)
+--
+-- Player and target frames only, every theme. While the unit is a player
+-- character its class circle from the selected M.classIcon sheet replaces the
+-- 2D or 3D portrait; an NPC target keeps the normal portrait path. Gated on
+-- UnitIsPlayer like the Modern WoW fallback below: a creature has no class.
+-- The icon is not mirrored on the target; the art has its own orientation.
+-- Kept on model3d: this file is at Lua 5.0's active-local limit.
+-- ---------------------------------------------------------------------------
+function model3d.ClassIconSource(frame)
+  local id = frame and frame.spec and frame.spec.id
+  if id ~= "player" and id ~= "target" then return nil end
+  if not U.db or not U.db.portraitClassIcon then return nil end
+  local unit = frame.unit
+  if not unit or not ApiTruth("UnitIsPlayer", unit) then return nil end
+  local token = frame.data and frame.data.class
+  local cell = token and M.modernWow.classCell[token]
+  if not cell then return nil end
+  local texture = M.classIcon.texture[U.GetPortraitClassIconStyle()] or
+                  M.classIcon.texture.blizzard
+  return texture, cell
+end
+
+function model3d.PaintClassIcon(icon, texture, cell)
+  pcall(icon.SetTexture, icon, texture)
+  pcall(icon.SetTexCoord, icon, cell[1], cell[2], cell[3], cell[4])
+  pcall(icon.Show, icon)
+end
+
+-- Classic: an addon-owned texture in the model box, at the native portrait's
+-- full diameter, while the native 2D portrait is faded out exactly as for 3D.
+-- The box sits one level under the native frame, so its ring stays on top.
+function model3d.RefreshClassicClassIcon(frame, box)
+  local texture, cell = model3d.ClassIconSource(frame)
+  local icon = box and box.puiClassIconTexture
+  if texture and box and not icon and box.puiClassicFullSize then
+    local ok, created = pcall(box.CreateTexture, box, nil, "ARTWORK")
+    if ok and created then
+      icon = created
+      icon:SetWidth(box.puiClassicFullSize)
+      icon:SetHeight(box.puiClassicFullSize)
+      icon:SetPoint("CENTER", box, "CENTER", 0, 0)
+      box.puiClassIconTexture = icon
+    end
+  end
+  if not texture or not icon then
+    if icon then pcall(icon.Hide, icon) end
+    return false
+  end
+  model3d.HideBox(box)
+  model3d.PaintClassIcon(icon, texture, cell)
+  model3d.SetClassic2DShown(frame, false)
+  return true
+end
+
+-- Modern square and Modern WoW ring: the class icon takes over box.icon.
+-- Leaving it clears the 2D cache and the stone/cleared markers so the 2D
+-- portrait or the 3D bed is rebuilt on the same refresh.
+function model3d.RefreshBoxClassIcon(frame, box)
+  local texture, cell = model3d.ClassIconSource(frame)
+  if not texture then
+    if box.puiClassIconShown then
+      box.puiClassIconShown = nil
+      box.puiPortraitBackground = nil
+      box.puiPortraitCleared = nil
+      frame.puiPortraitKey = nil
+      frame.puiPortraitPaints = nil
+      pcall(box.icon.SetTexture, box.icon, "")
+      pcall(box.icon.SetTexCoord, box.icon, 0, 1, 0, 1)
+    end
+    return false
+  end
+  model3d.HideBox(box)
+  if not box.puiClassIconShown or box.puiPortraitBackground then
+    box.puiClassIconShown = true
+    box.puiPortraitBackground = nil
+    if not model3d.SquareTheme() and
+       type(U.ModernWowAnchorPortraitIcon) == "function" then
+      U.ModernWowAnchorPortraitIcon(box)
+    end
+  end
+  model3d.PaintClassIcon(box.icon, texture, cell)
+  frame.puiPortraitKey = nil
+  frame.puiPortraitPaints = nil
+  return true
 end
 
 -- Only the real party-member rows carry rangeCheck. When one leaves object
@@ -2044,6 +2133,9 @@ end
 function model3d.HideBox(box)
   local model = box and box.puiModel
   model3d.SetClassicBackgroundShown(box, false)
+  if box and box.puiClassIconTexture then
+    pcall(box.puiClassIconTexture.Hide, box.puiClassIconTexture)
+  end
   if not model then return end
   pcall(model.Hide, model)
   model.puiKey = nil
@@ -2077,6 +2169,8 @@ function model3d.RefreshSquare(frame, box)
     model3d.Hide(frame)
     return true
   end
+
+  if model3d.RefreshBoxClassIcon(frame, box) then return true end
 
   if model3d.Refresh(frame, box) then
     pcall(box.icon.Hide, box.icon)
@@ -2112,6 +2206,7 @@ local function RefreshPortrait(frame)
     if classicNative.NativeShown(frame) then
       model3d.MirrorClassicTarget2D(frame)
       local classicBox = model3d.ClassicBox(frame)
+      if model3d.RefreshClassicClassIcon(frame, classicBox) then return end
       local shown3d = classicBox and model3d.Refresh(frame, classicBox)
       model3d.SetClassicBackgroundShown(classicBox, shown3d)
       model3d.SetClassic2DShown(frame, not shown3d)
@@ -2126,6 +2221,7 @@ local function RefreshPortrait(frame)
   -- `modern` owns its square path; the ring/stone block below is modern-wow's.
   local square = model3d.SquareTheme()
   if square and model3d.RefreshSquare(frame, box) then return end
+  if not square and model3d.RefreshBoxClassIcon(frame, box) then return end
   local portrait3d = not square and model3d.Level(frame) > 0
   local shown3d = not square and model3d.Refresh(frame, box)
   -- A party member the model cannot show -- offline, out of sight, out of
@@ -2281,19 +2377,13 @@ end
 -- No event: the pet frame already takes a full refresh on every scheduled
 -- sweep (see RefreshScheduledUnits), which is where the band is re-read.
 -- ---------------------------------------------------------------------------
-local HAPPINESS_SIZE = 24
+local HAPPINESS_SIZE = M.petHappiness.size
 
 -- User-requested modern-theme adjustment (2026-09-24): shrink the flat badge
 -- and nudge it up/right relative to the modern-wow layout below.
 local MODERN_HAPPINESS_SCALE = 0.6
 local MODERN_HAPPINESS_TOP_OFFSET = 6
 local MODERN_HAPPINESS_RIGHT_OFFSET = 1
-
-local HAPPINESS_CELLS = {
-  [1] = { 48 / 128, 72 / 128, 0, 24 / 64 }, -- sad
-  [2] = { 24 / 128, 48 / 128, 0, 24 / 64 }, -- neutral
-  [3] = { 0, 24 / 128, 0, 24 / 64 },        -- happy
-}
 
 local function BuildHappinessIndicator(frame, border)
   local box = frame.portrait
@@ -2348,7 +2438,7 @@ local function ApplyHappinessIndicator(frame)
     if ok then band = tonumber(value) end
   end
 
-  local cell = band and HAPPINESS_CELLS[band]
+  local cell = band and M.petHappiness.cells[band]
   local state = cell and band or false
   -- Nothing below needs to run again while the band has not changed.
   if frame.happinessState == state then return end
@@ -5356,20 +5446,18 @@ LayoutParty = function(force)
   if not force and shape == partyLayoutShape then return end
   partyLayoutShape = shape
 
-  -- `lastHeight` is the declared height of the row that ends the block, kept
-  -- so the anchor can be given the block's DRAWN extent below. `lastDrawn` is
-  -- set when that height is already a drawn extent and must not be scaled.
-  local offset, width, lastHeight, lastDrawn = 0, 0, 0, false
+  -- `offset` is in the rows' own units: every row of the block shares one
+  -- scale (modules/modernwow.lua mw.units gives them all the same trim).
+  local offset, width = 0, 0
 
   local playerRow = frames[PARTY_PLAYER_ID]
 
   -- A theme may draw the rows at a scale of their own. `modern-wow` gives each
   -- one a pixel-perfect own-scale times its 1.15 size trim (modules/
-  -- modernwow.lua, mw.units), and a frame's own scale resizes it about its
-  -- anchor point without touching the offsets around it (core/mover.lua,
-  -- EntryScale, records the measurement). So each row is drawn `ratio` times
-  -- its declared size while the stacking offsets below are not, and the block
-  -- ends `ratio` times the last row's height below where that row starts.
+  -- modernwow.lua, mw.units). A row's SetPoint offsets are in its OWN units
+  -- (knowledge.json / layout.own_scale_space_on_112), so the
+  -- stacking offsets below scale with the rows and the block simply ends
+  -- `ratio` times `offset` below the anchor's top, in the anchor's units.
   --
   -- The ratio is 1 in every theme that draws the rows at the anchor's own
   -- scale, which leaves this arithmetic exactly as it was.
@@ -5394,7 +5482,6 @@ LayoutParty = function(force)
       playerRow:ClearAllPoints()
       playerRow:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, 0)
       offset = FrameHeight(playerRow.spec)
-      lastHeight, lastDrawn = FrameHeight(playerRow.spec), false
       if FrameWidth(playerRow.spec) > width then
         width = FrameWidth(playerRow.spec)
       end
@@ -5414,7 +5501,6 @@ LayoutParty = function(force)
       member:ClearAllPoints()
       member:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, -offset)
       offset = offset + FrameHeight(member.spec)
-      lastHeight, lastDrawn = FrameHeight(member.spec), false
       if FrameWidth(member.spec) > width then width = FrameWidth(member.spec) end
     end
 
@@ -5428,8 +5514,9 @@ LayoutParty = function(force)
         -- overlap), so it cannot run into the next member.
         pet:ClearAllPoints()
         pet:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, -offset)
-        offset = offset + dressed * ratio
-        lastHeight, lastDrawn = dressed * ratio, true
+        -- `dressed` is the pet's own height before its frame scale, the same
+        -- units as `offset`.
+        offset = offset + dressed
         if FrameWidth(pet.spec) > width then width = FrameWidth(pet.spec) end
       elseif shown[i] then
         -- Overlapped by one border unit, the same trick the stacked bars
@@ -5438,7 +5525,6 @@ LayoutParty = function(force)
         pet:ClearAllPoints()
         pet:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, -(offset - border))
         offset = offset + FrameHeight(pet.spec) - border
-        lastHeight, lastDrawn = FrameHeight(pet.spec), false
         if FrameWidth(pet.spec) > width then width = FrameWidth(pet.spec) end
       else
         SetFrameShown(pet, false)
@@ -5449,12 +5535,8 @@ LayoutParty = function(force)
   -- The anchor carries the party mover, so its rect has to be the block as
   -- DRAWN: edit mode's handle and the magnet barrier are that rectangle, and a
   -- rect that does not cover the block puts both somewhere the player cannot
-  -- see. `ratio` (computed above) is how much larger than declared each row
-  -- is drawn; a last row already stacked by its drawn height needs no scaling.
-  local height = offset
-  if height > 0 and lastHeight > 0 and ratio ~= 1 and not lastDrawn then
-    height = height - lastHeight + lastHeight * ratio
-  end
+  -- see. `ratio` (computed above) converts the rows' units into the anchor's.
+  local height = offset * ratio
 
   anchor:SetWidth((width > 0 and width or
                    (PARTY_WIDTH + 2 * U.BorderSize())) * ratio)
@@ -5752,6 +5834,35 @@ function U.SetPortrait3D(family, value)
   return true
 end
 
+function U.GetPortraitClassIcon()
+  return U.db and U.db.portraitClassIcon and true or false
+end
+
+-- The stored style is an index into M.classIcon.order; anything out of range
+-- reads as the first (Blizzard) style.
+function U.GetPortraitClassIconStyleIndex()
+  local index = U.db and tonumber(U.db.portraitClassIconStyle)
+  if not index or not M.classIcon.order[index] then return 1 end
+  return index
+end
+
+function U.GetPortraitClassIconStyle()
+  return M.classIcon.order[U.GetPortraitClassIconStyleIndex()]
+end
+
+function U.SetPortraitClassIcon(value, styleIndex)
+  if not U.db then return false end
+  if value ~= nil then U.db.portraitClassIcon = value and true or false end
+  if styleIndex and M.classIcon.order[styleIndex] then
+    U.db.portraitClassIconStyle = styleIndex
+  end
+  RefreshAll()
+  if type(U.RefreshUnitFrameSettingsViews) == "function" then
+    U.RefreshUnitFrameSettingsViews()
+  end
+  return true
+end
+
 -- What the exact-vitals section occupies from its own heading down to the next
 -- one: heading, the checkbox 26 below it, and the description five below that.
 -- The description has no fixed height -- this client centres a font string's
@@ -5874,6 +5985,70 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   end
 
   y = y - (modernPortraits and 166 or EXACT_VITALS_SECTION_HEIGHT + 24)
+
+  -- Class-icon portraits for the player and target frames. The style picker
+  -- shows only while the option is on.
+  local classIconHeader = U.CreateSectionHeader(parent, {
+    text = U.L("UF_CLASS_ICON_HEADER"),
+    width = width or 496,
+    y = y,
+  })
+  table.insert(widgets, classIconHeader)
+
+  local classIconStyle
+  local classIcon = U.CreateCheckbox(parent, {
+    name = "PandaUISettingsPortraitClassIcon",
+    text = U.L("UF_CLASS_ICON"),
+    textWidth = 214,
+    value = U.GetPortraitClassIcon(),
+    onChange = function(value)
+      U.SetPortraitClassIcon(value)
+      classIconStyle.puiSetShown(value)
+    end,
+  })
+  classIcon.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y - 26)
+  table.insert(widgets, classIcon)
+
+  local styleItems = {}
+  local s
+  for s = 1, table.getn(M.classIcon.order) do
+    table.insert(styleItems, {
+      value = s,
+      text = U.L("UF_CLASS_ICON_STYLE_" ..
+                 string.upper(M.classIcon.order[s])),
+    })
+  end
+  classIconStyle = U.CreateDropdown(parent, {
+    name = "PandaUISettingsPortraitClassIconStyle",
+    width = 240,
+    height = 24,
+    rowHeight = 20,
+    value = U.GetPortraitClassIconStyleIndex(),
+    items = styleItems,
+    onChange = function(value)
+      U.SetPortraitClassIcon(nil, value)
+    end,
+  })
+  classIconStyle.SetPoint("TOPLEFT", parent, "TOPLEFT", 240, y - 26)
+  table.insert(widgets, classIconStyle)
+
+  local classIconHint = U.CreateSettingsLabel(parent, {
+    size = M.fontSize.small,
+    color = M.color.textDim,
+    inherits = "GameFontNormalSmall",
+    justify = "LEFT",
+    width = width or 496,
+  })
+  if classIconHint then
+    -- 5 below the 24-tall style dropdown's bottom edge (row at y - 26), not
+    -- below the shorter checkbox, so the text clears the dropdown.
+    classIconHint:ClearAllPoints()
+    classIconHint:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y - 26 - 24 - 5)
+    classIconHint:SetText(U.L("UF_CLASS_ICON_HINT"))
+    table.insert(widgets, classIconHint)
+  end
+
+  y = y - EXACT_VITALS_SECTION_HEIGHT
 
   local vitalsHeader = U.CreateSectionHeader(parent, {
     text = U.L("UF_EXACT_VITALS_HEADER"),
@@ -6009,6 +6184,9 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
     portrait3dTarget.SetValue(U.GetPortrait3D("target"))
     portrait3dTargetTarget.SetValue(U.GetPortrait3D("targettarget"))
     portrait3dParty.SetValue(U.GetPortrait3D("party"))
+    classIcon.SetValue(U.GetPortraitClassIcon())
+    classIconStyle.SetValue(U.GetPortraitClassIconStyleIndex())
+    classIconStyle.puiSetShown(U.GetPortraitClassIcon())
     exactVitals.SetValue(U.GetExactVitals())
     manaTick.SetValue(U.GetUnitFramePowerTick("manaTick"))
     energyTick.SetValue(U.GetUnitFramePowerTick("energyTick"))

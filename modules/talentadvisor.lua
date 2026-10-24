@@ -776,7 +776,14 @@ function advisor.Validate(build)
     local canonical, expected = advisor.TreeIndex(panel.background)
     if canonical then
       found[canonical] = true
-      if U.TalentGrid.NumTalents(panel.id) ~= expected then return false end
+      -- The advisor catalog targets the stock 1.12 (build 5875) talents.
+      -- OctoWoW keeps those entries in their original order and appends its
+      -- custom talents to several trees (Mage Arcane is 19 entries here,
+      -- versus the catalog's 16). Requiring an exact count rejects the whole
+      -- build before any highlight can animate. A shorter tree is unsafe,
+      -- but an appended suffix is safe: TargetRank returns zero for it and a
+      -- point spent there is reported as outside the selected stock build.
+      if U.TalentGrid.NumTalents(panel.id) < expected then return false end
       local code = build.codes[canonical] or ""
       if string.len(code) > expected then return false end
       for j = 1, string.len(code) do

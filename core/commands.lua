@@ -334,7 +334,7 @@ local function ShowUnitFrameCheck()
     end
   end
 
-  -- Warriors and Rogues only. modules/stancebar.lua never creates its bar or
+  -- Warriors, Rogues and Druids only. modules/stancebar.lua never creates its bar or
   -- mover for any other class, so supported false with created false is the
   -- expected line for everyone else. "classic" reports whether the buttons
   -- took the client's own action-button faces, which only Classic WoW does.

@@ -1030,12 +1030,43 @@ local function EnsureSellAllJunkButton(layout)
   return junkButton
 end
 
+-- The native "Repair Items" label sat on the tray's bottom edge, well below
+-- the repair buttons (user request, 2026-10-25). Centre it on the button row
+-- and keep its native horizontal position, measured once.
+local function AlignRepairText()
+  local token = ModernToken()
+  local layout = token and token.repairs
+  local text = G("MerchantRepairText")
+  if not layout or not text or not frame then return end
+
+  local x = frame.puiRepairTextLeft
+  if not x then
+    local textOk, textLeft = pcall(text.GetLeft, text)
+    local frameOk, frameLeft = pcall(frame.GetLeft, frame)
+    textLeft = textOk and tonumber(textLeft) or nil
+    frameLeft = frameOk and tonumber(frameLeft) or nil
+    if textLeft and frameLeft then
+      x = textLeft - frameLeft
+      frame.puiRepairTextLeft = x
+    else
+      x = 16
+    end
+  end
+
+  pcall(function()
+    text:ClearAllPoints()
+    text:SetPoint("LEFT", frame, "TOPLEFT", x,
+                  -(layout.top + layout.size / 2))
+  end)
+end
+
 local function StyleRepairButtons()
   local repairAll = G("MerchantRepairAllButton")
   if useModernWow then
     local token = ModernToken()
     local layout = token and token.repairs
     if not layout then return end
+    AlignRepairText()
     EnsureSellAllJunkButton(layout)
     local repairItem = G("MerchantRepairItemButton")
     local guildRepair = G("MerchantGuildBankRepairButton")
@@ -1636,6 +1667,7 @@ local function BuildFrame()
     RefreshLastBuybackSlot()
     ScheduleLastBuybackRefresh()
     RefreshSellAllJunkButton()
+    AlignRepairText()
   end)
   -- UpdateBuybackInfo hides MerchantPageText and the page buttons, but not
   -- Modern WoW's own page label, which stayed over the bottom buyback rows

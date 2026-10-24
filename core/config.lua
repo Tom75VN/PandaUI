@@ -80,6 +80,12 @@ local defaults = {
   portrait3dTarget = false,
   portrait3dTargetTarget = false,
   portrait3dParty = false,
+  -- Player and target frames show the unit's class icon instead of its
+  -- portrait when the unit is a player character. The style is an index into
+  -- M.classIcon.order (1 = Blizzard circles); a number for SavedVariables
+  -- safety, like portrait3d.
+  portraitClassIcon = false,
+  portraitClassIconStyle = 1,
   locked    = true,     -- mover mode state; see core/mover.lua
   positions = {},       -- mover id -> { point, relativePoint, x, y }
   modules   = {},       -- module name -> { enabled = true }
