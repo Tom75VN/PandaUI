@@ -427,18 +427,25 @@ end
 -- spot, and LFT re-parents itself to UIParent on drop.
 -- ---------------------------------------------------------------------------
 local RING_ICONS = {
-  "PandaUISettingsButton",
+  "PandaUISettingsButton", "PandaUIGroupButton",
   "MiniMapTrackingFrame", "MiniMapMailFrame", "MiniMapBattlefieldFrame",
   "MiniMapMeetingStoneFrame", "TWMiniMapBattlefieldFrame",
   "TWMinimapShopFrame", "LFTMinimapButton",
 }
 local SETTINGS_NAME = "PandaUISettingsButton"
+local GROUP_NAME = "PandaUIGroupButton"
+-- Left of the map, between the native icons and the settings button.
+local GROUP_DEFAULT_ANGLE = 180
+local FLYOUT_PAD = 6
+local FLYOUT_GAP = 4
 -- Bottom-left, the usual minimap-button spot; no native icon starts there.
 local SETTINGS_DEFAULT_ANGLE = 225
 -- Icon centres sit this far outside the map's edge, like the native icons.
 local RING_OUTSET = 10
 
 local ring = { hooked = {}, original = {}, dragging = nil, stoppedAt = nil }
+-- The icon group and its flyout (see "Grouped icons").
+local group = {}
 
 function ring.Angles()
   local cfg = U.ModuleConfig("minimap", { enabled = true, iconAngles = {} })
@@ -503,6 +510,8 @@ function ring.Update()
 end
 
 function ring.StartDrag(frame)
+  -- An icon inside the flyout has no rim place to be dragged along.
+  if group.IsGrouped(frame) then return end
   ring.dragging = frame
   ring.dragAngle = nil
   pcall(frame.LockHighlight, frame)
@@ -544,12 +553,9 @@ function ring.GuardScript(frame, script)
   end)
 end
 
-function ring.Hook(frame)
-  local ok, name = pcall(frame.GetName, frame)
-  if not ok or not name or ring.hooked[name] then return false end
-
-  -- Where the client or the theme put it, re-applied by /pui reset. GetPoint
-  -- returns the tuple SetPoint was given (frames.getpoint_y_same_sign_as_setpoint).
+-- A frame's anchors as SetPoint tuples. GetPoint returns the tuple SetPoint
+-- was given (frames.getpoint_y_same_sign_as_setpoint).
+function ring.ReadPoints(frame)
   local points = {}
   local countOk, count = pcall(frame.GetNumPoints, frame)
   if not countOk or type(count) ~= "number" then count = 0 end
@@ -560,6 +566,24 @@ function ring.Hook(frame)
       table.insert(points, { point, relative, relativePoint, x, y })
     end
   end
+  return points
+end
+
+function ring.SetPoints(frame, points)
+  if not frame or not points or table.getn(points) == 0 then return end
+  pcall(frame.ClearAllPoints, frame)
+  local i
+  for i = 1, table.getn(points) do
+    pcall(frame.SetPoint, frame, unpack(points[i]))
+  end
+end
+
+function ring.Hook(frame)
+  local ok, name = pcall(frame.GetName, frame)
+  if not ok or not name or ring.hooked[name] then return false end
+
+  -- Where the client or the theme put it, re-applied by /pui reset.
+  local points = ring.ReadPoints(frame)
 
   if not pcall(frame.RegisterForDrag, frame, "LeftButton") then
     U.Debug("minimap ring: RegisterForDrag failed on " .. name)
@@ -581,25 +605,24 @@ function ring.ApplySaved()
   for i = 1, table.getn(RING_ICONS) do
     local name = RING_ICONS[i]
     local angle = tonumber(angles[name])
-    if ring.hooked[name] and angle then ring.Place(U.G(name), angle) end
+    if ring.hooked[name] and angle and not group.saved[name] then
+      ring.Place(U.G(name), angle)
+    end
   end
 end
 
 function ring.Reset()
   local angles = ring.Angles()
-  local i, j
+  local i
+  -- Grouped icons go back onto the map first, so every icon is reset to its
+  -- native spot; the group is then rebuilt from the same choices.
+  group.ReleaseAll()
   for i = 1, table.getn(RING_ICONS) do
     local name = RING_ICONS[i]
-    local frame = U.G(name)
-    local points = ring.original[name]
     angles[name] = nil
-    if frame and points and table.getn(points) > 0 then
-      pcall(frame.ClearAllPoints, frame)
-      for j = 1, table.getn(points) do
-        pcall(frame.SetPoint, frame, unpack(points[j]))
-      end
-    end
+    ring.SetPoints(U.G(name), ring.original[name])
   end
+  group.Apply()
   return true
 end
 
@@ -616,6 +639,370 @@ function ring.Setup()
   U.RegisterEvent("PLAYER_ENTERING_WORLD", ring.ApplySaved)
   U.OnPositionReset(ring.Reset)
   U.Debug("minimap ring: " .. hooked .. " icons draggable around the minimap")
+end
+
+-- ---------------------------------------------------------------------------
+-- Grouped icons (roadmap item, optional)
+--
+-- With "Group minimap icons" on, the chosen icons are re-parented into one
+-- flyout that a single launcher icon on the rim opens. Candidates are the ring
+-- icons above plus other addons' minimap buttons, found the way pfUI-octo's
+-- addonbuttons module finds them (WORKING_112_SOURCE): named Minimap and
+-- MinimapBackdrop children up to 40px with a click or mouse script. The
+-- Minimap settings page picks the members; config ungrouped[name] keeps an icon
+-- on the map. The icons stay their owners' frames: parent, strata, level and
+-- anchors are saved on capture and all restored on release
+-- (knowledge.json / minimap.icon_grouping_flyout_unverified).
+-- ---------------------------------------------------------------------------
+local ADDON_BUTTON_MAX = 40
+local FLYOUT_COLUMNS = 6
+-- Name prefixes of Minimap children that are not icons to group: map pins and
+-- notes (pfUI-octo's ignore list), the map's own controls and this suite's
+-- own frames.
+local NOT_ICONS = {
+  "note", "jquest", "naut_", "minimapicon", "gathermatepin", "westpointer",
+  "chinchilla_", "smartminimapzoom", "questienote", "smm", "pfminimappin",
+  "gathernote", "mininotepoi", "fwgminimappoi", "reciperadarminimapicon",
+  "cartographernotespoi", "minimapzoom", "minimapping", "minimaptoggle",
+  "minimapworldmap", "minimapbackdrop", "pandaui", "pandaquest",
+}
+-- Labels for the client's own icons; any other icon shows its frame name.
+local ICON_LABELS = {
+  MiniMapTrackingFrame = "MINIMAP_ICON_TRACKING",
+  MiniMapMailFrame = "MINIMAP_ICON_MAIL",
+  MiniMapBattlefieldFrame = "MINIMAP_ICON_BATTLEFIELD",
+  MiniMapMeetingStoneFrame = "MINIMAP_ICON_MEETING_STONE",
+  TWMiniMapBattlefieldFrame = "MINIMAP_ICON_BATTLEFIELD",
+  TWMinimapShopFrame = "MINIMAP_ICON_SHOP",
+  LFTMinimapButton = "MINIMAP_ICON_GROUP_FINDER",
+}
+
+group.saved = {}
+group.found = {}
+
+function group.Config()
+  local cfg = U.ModuleConfig("minimap", { enabled = true })
+  if type(cfg.ungrouped) ~= "table" then cfg.ungrouped = {} end
+  return cfg
+end
+
+function group.IsGrouped(frame)
+  local ok, name = pcall(frame.GetName, frame)
+  return ok and name ~= nil and group.saved[name] ~= nil
+end
+
+function group.IsRingIcon(name)
+  local i
+  for i = 1, table.getn(RING_ICONS) do
+    if RING_ICONS[i] == name then return true end
+  end
+  return false
+end
+
+-- Whether a Minimap child looks like an addon's minimap button.
+function group.LooksLikeButton(frame)
+  local ok, name = pcall(frame.GetName, frame)
+  if not ok or type(name) ~= "string" or group.IsRingIcon(name) then return false end
+  local lower = string.lower(name)
+  local i
+  for i = 1, table.getn(NOT_ICONS) do
+    if string.find(lower, NOT_ICONS[i], 1, true) == 1 then return false end
+  end
+  local wOk, width = pcall(frame.GetWidth, frame)
+  local hOk, height = pcall(frame.GetHeight, frame)
+  if not wOk or not hOk or type(width) ~= "number" or type(height) ~= "number" or
+     width > ADDON_BUTTON_MAX or height > ADDON_BUTTON_MAX then
+    return false
+  end
+  local isButton = pcall(frame.IsFrameType, frame, "Button") and frame:IsFrameType("Button")
+  local function Has(script)
+    local scriptOk, handler = pcall(frame.GetScript, frame, script)
+    return scriptOk and type(handler) == "function"
+  end
+  if isButton then
+    return Has("OnClick") or Has("OnMouseDown") or Has("OnMouseUp")
+  end
+  if string.find(lower, "icon", 1, true) or string.find(lower, "button", 1, true) then
+    return Has("OnMouseDown") or Has("OnMouseUp")
+  end
+  return false
+end
+
+-- Adds newly created addon buttons to group.found. Buttons already captured
+-- are flyout children now, so they are never lost from the list.
+function group.Scan()
+  local holders = { U.G("Minimap"), U.G("MinimapBackdrop") }
+  local known = {}
+  local i, j
+  for i = 1, table.getn(group.found) do known[group.found[i]] = true end
+  for i = 1, table.getn(holders) do
+    local holder = holders[i]
+    local ok, children = false, nil
+    if holder then ok, children = pcall(function() return { holder:GetChildren() } end) end
+    if ok and type(children) == "table" then
+      for j = 1, table.getn(children) do
+        local child = children[j]
+        if group.LooksLikeButton(child) then
+          local name = child:GetName()
+          if not known[name] then
+            known[name] = true
+            table.insert(group.found, name)
+          end
+        end
+      end
+    end
+  end
+end
+
+-- Every icon the player can put in the group, ring icons first.
+function group.Candidates()
+  local list = {}
+  local i
+  for i = 1, table.getn(RING_ICONS) do
+    local name = RING_ICONS[i]
+    if name ~= SETTINGS_NAME and name ~= GROUP_NAME and ring.hooked[name] then
+      table.insert(list, name)
+    end
+  end
+  for i = 1, table.getn(group.found) do
+    if U.G(group.found[i]) then table.insert(list, group.found[i]) end
+  end
+  return list
+end
+
+function group.Label(name)
+  local key = ICON_LABELS[name]
+  if key then return U.L(key) end
+  -- LibDBIcon-style names carry a library prefix before the addon name.
+  local short = string.gsub(name, "^LibDBIcon10_", "")
+  return short
+end
+
+function group.Build()
+  if group.flyout then return group.flyout end
+  local flyout = U.CreatePanel(UIParent, {
+    name = "PandaUIGroupFlyout", width = 100, height = 40,
+  })
+  pcall(flyout.SetFrameStrata, flyout, "DIALOG")
+  pcall(flyout.EnableMouse, flyout, true)
+  pcall(flyout.SetClampedToScreen, flyout, true)
+  flyout:SetScript("OnShow", function() group.Layout() end)
+  flyout:Hide()
+  local special = U.G("UISpecialFrames")
+  if type(special) == "table" then
+    table.insert(special, "PandaUIGroupFlyout")
+  end
+  group.flyout = flyout
+  return flyout
+end
+
+-- Lays the members the client currently shows in rows, then hangs the flyout
+-- off the launcher on the side facing the middle of the screen.
+function group.Layout()
+  local flyout, launcher = group.flyout, group.launcher
+  if not flyout or not launcher then return end
+
+  local shown = {}
+  local candidates = group.Candidates()
+  local i
+  for i = 1, table.getn(candidates) do
+    local frame = group.saved[candidates[i]] and U.G(candidates[i])
+    if frame and frame:IsShown() then table.insert(shown, frame) end
+  end
+  local count = table.getn(shown)
+  if count == 0 then
+    flyout:Hide()
+    return
+  end
+
+  -- Same scale the icons had on the minimap.
+  local minimap = U.G("Minimap")
+  if minimap then
+    local mapOk, mapScale = pcall(minimap.GetEffectiveScale, minimap)
+    local uiOk, uiScale = pcall(UIParent.GetEffectiveScale, UIParent)
+    if mapOk and uiOk and type(mapScale) == "number" and
+       type(uiScale) == "number" and uiScale > 0 then
+      pcall(flyout.SetScale, flyout, mapScale / uiScale)
+    end
+  end
+
+  local columns = math.min(count, FLYOUT_COLUMNS)
+  local rows = math.ceil(count / FLYOUT_COLUMNS)
+  local cell = BUTTON_SIZE + FLYOUT_GAP
+  flyout:SetWidth(FLYOUT_PAD * 2 + columns * cell - FLYOUT_GAP)
+  flyout:SetHeight(FLYOUT_PAD * 2 + rows * cell - FLYOUT_GAP)
+  local level = flyout:GetFrameLevel()
+  for i = 1, count do
+    local frame = shown[i]
+    local row = math.floor((i - 1) / FLYOUT_COLUMNS)
+    local column = (i - 1) - row * FLYOUT_COLUMNS
+    pcall(frame.SetFrameLevel, frame, level + 2)
+    pcall(frame.ClearAllPoints, frame)
+    pcall(frame.SetPoint, frame, "CENTER", flyout, "TOPLEFT",
+      FLYOUT_PAD + column * cell + BUTTON_SIZE / 2,
+      -(FLYOUT_PAD + row * cell + BUTTON_SIZE / 2))
+  end
+
+  local below = false
+  local ok, _, cy = pcall(launcher.GetCenter, launcher)
+  local scaleOk, scale = pcall(launcher.GetEffectiveScale, launcher)
+  local uiOk, uiScale = pcall(UIParent.GetEffectiveScale, UIParent)
+  if ok and scaleOk and uiOk and type(cy) == "number" and
+     type(scale) == "number" and type(uiScale) == "number" then
+    below = cy * scale > UIParent:GetHeight() * uiScale / 2
+  end
+  flyout:ClearAllPoints()
+  if below then
+    flyout:SetPoint("TOPRIGHT", launcher, "BOTTOMRIGHT", 0, -2)
+  else
+    flyout:SetPoint("BOTTOMRIGHT", launcher, "TOPRIGHT", 0, 2)
+  end
+end
+
+function group.Capture(name)
+  local frame = U.G(name)
+  if not frame or group.saved[name] then return end
+  local ok, parent = pcall(frame.GetParent, frame)
+  if not ok or not parent then return end
+  local state = { parent = parent, points = ring.ReadPoints(frame) }
+  local strataOk, strata = pcall(frame.GetFrameStrata, frame)
+  if strataOk then state.strata = strata end
+  local levelOk, level = pcall(frame.GetFrameLevel, frame)
+  if levelOk then state.level = level end
+  -- Another addon's own drag would move its button out of the flyout.
+  if not ring.hooked[name] then
+    local startOk, start = pcall(frame.GetScript, frame, "OnDragStart")
+    local stopOk, stop = pcall(frame.GetScript, frame, "OnDragStop")
+    if startOk then state.dragStart = start end
+    if stopOk then state.dragStop = stop end
+    pcall(frame.SetScript, frame, "OnDragStart", nil)
+    pcall(frame.SetScript, frame, "OnDragStop", nil)
+  end
+  group.saved[name] = state
+  pcall(frame.SetParent, frame, group.flyout)
+end
+
+function group.Release(name)
+  local frame = U.G(name)
+  local state = group.saved[name]
+  group.saved[name] = nil
+  if not frame or not state then return end
+  pcall(frame.SetParent, frame, state.parent)
+  if state.strata then pcall(frame.SetFrameStrata, frame, state.strata) end
+  if state.level then pcall(frame.SetFrameLevel, frame, state.level) end
+  if not ring.hooked[name] then
+    pcall(frame.SetScript, frame, "OnDragStart", state.dragStart)
+    pcall(frame.SetScript, frame, "OnDragStop", state.dragStop)
+  end
+  local angle = ring.hooked[name] and tonumber(ring.Angles()[name])
+  if angle then
+    ring.Place(frame, angle)
+  else
+    ring.SetPoints(frame, state.points)
+  end
+  -- Moved out of the hidden flyout, a shown icon stays invisible under its
+  -- visible parent until it is shown again (probe minimapgroup.v1:
+  -- IsShown true, IsVisible false; knowledge.json /
+  -- minimap.icon_grouping_flyout_unverified).
+  local shownOk, shown = pcall(frame.IsShown, frame)
+  if shownOk and shown then
+    pcall(frame.Hide, frame)
+    pcall(frame.Show, frame)
+  end
+end
+
+function group.ReleaseAll()
+  local names = {}
+  for name in pairs(group.saved) do table.insert(names, name) end
+  local i
+  for i = 1, table.getn(names) do group.Release(names[i]) end
+end
+
+function group.Apply()
+  if not group.launcher then return end
+  local cfg = group.Config()
+  local on = cfg.groupIcons and true or false
+  if on then
+    group.Build()
+    group.Scan()
+  end
+
+  local candidates = group.Candidates()
+  local i
+  for i = 1, table.getn(candidates) do
+    local name = candidates[i]
+    if on and not cfg.ungrouped[name] then
+      group.Capture(name)
+    elseif group.saved[name] then
+      group.Release(name)
+    end
+  end
+
+  if on then
+    group.launcher:Show()
+    if group.flyout:IsShown() then group.Layout() end
+  else
+    group.launcher:Hide()
+    if group.flyout then group.flyout:Hide() end
+  end
+end
+U.ApplyMinimapGroup = function() group.Apply() end
+
+-- For the settings page: { name, label } per candidate, scanned fresh.
+function U.MinimapGroupCandidates()
+  group.Scan()
+  local list = {}
+  local candidates = group.Candidates()
+  local i
+  for i = 1, table.getn(candidates) do
+    table.insert(list, { name = candidates[i], label = group.Label(candidates[i]) })
+  end
+  return list
+end
+
+function group.CreateLauncher(minimap)
+  local button = CreateFrame("Button", GROUP_NAME, minimap or UIParent)
+  button:SetWidth(BUTTON_SIZE)
+  button:SetHeight(BUTTON_SIZE)
+  pcall(button.EnableMouse, button, true)
+  if minimap then
+    local ok, level = pcall(minimap.GetFrameLevel, minimap)
+    if ok and type(level) == "number" then
+      pcall(button.SetFrameLevel, button, level + 5)
+    end
+  end
+
+  -- The native icon build: a small face under the stock tracking ring.
+  local icon = button:CreateTexture(nil, "BACKGROUND")
+  icon:SetWidth(20)
+  icon:SetHeight(20)
+  icon:SetPoint("TOPLEFT", button, "TOPLEFT", 7, -5)
+  pcall(icon.SetTexture, icon, "Interface\\Icons\\INV_Misc_Gear_01")
+  pcall(icon.SetTexCoord, icon, 0.08, 0.92, 0.08, 0.92)
+  local border = button:CreateTexture(nil, "OVERLAY")
+  border:SetWidth(52)
+  border:SetHeight(52)
+  border:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
+  pcall(border.SetTexture, border, "Interface\\Minimap\\MiniMap-TrackingBorder")
+  if pcall(button.SetHighlightTexture, button, MINIMAP_HIGHLIGHT) then
+    local ok, glow = pcall(button.GetHighlightTexture, button)
+    if ok and glow then
+      pcall(glow.SetAllPoints, glow, button)
+      pcall(glow.SetBlendMode, glow, "ADD")
+    end
+  end
+
+  button:SetScript("OnClick", function()
+    local flyout = group.Build()
+    if flyout:IsShown() then flyout:Hide() else flyout:Show() end
+  end)
+
+  local angle = tonumber(ring.Angles()[GROUP_NAME]) or GROUP_DEFAULT_ANGLE
+  if not ring.Place(button, angle) and minimap then
+    button:SetPoint("CENTER", minimap, "CENTER", 0, 0)
+  end
+  button:Hide()
+  group.launcher = button
 end
 
 -- The settings button's first place: its saved angle, else bottom-left. The
@@ -664,7 +1051,8 @@ local function RegisterMinimapMover()
     return
   end
 
-  U.RegisterMover("minimap", target, { label = U.L("MOVER_LABEL_MINIMAP"), default = default })
+  U.RegisterMover("minimap", target, { label = U.L("MOVER_LABEL_MINIMAP"),
+                                       default = default, scalable = true })
   U.Debug("minimap mover registered on " .. name)
 end
 
@@ -821,6 +1209,101 @@ local function Apply()
 end
 U.ApplyMinimapButton = Apply
 
+-- The Minimap settings page: the group switch, then one checkbox per icon that
+-- can join the group, in two columns like the Classic modules page. Icons are
+-- listed as found when the page is first built.
+local function BuildSettingsPage(parent)
+  local widgets = {}
+  local controls = {}
+  local pageWidth = U.SETTINGS_PAGE_WIDTH
+  local columnWidth = math.floor(pageWidth / 2)
+
+  local header = U.CreateSectionHeader(parent, {
+    text = U.L("SETTINGS_PAGE_MINIMAP"),
+    width = pageWidth,
+    y = -4,
+  })
+  table.insert(widgets, header)
+
+  local enable = U.CreateCheckbox(parent, {
+    name = "PandaUISettingsMinimapGroup",
+    text = U.L("SETTINGS_MINIMAP_GROUP"),
+    value = group.Config().groupIcons and true or false,
+    onChange = function(value)
+      group.Config().groupIcons = value and true or false
+      group.Apply()
+    end,
+  })
+  enable.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -34)
+  table.insert(widgets, enable)
+
+  local hint = U.CreateSettingsLabel(parent, {
+    size = M.fontSize.small,
+    color = M.color.textDim,
+    inherits = "GameFontNormalSmall",
+    justify = "LEFT",
+    width = pageWidth,
+  })
+  if hint then
+    U.AnchorSettingsDescription(hint, enable.box)
+    hint:SetText(U.L("SETTINGS_MINIMAP_GROUP_HINT"))
+    table.insert(widgets, hint)
+  end
+
+  local listHeader = U.CreateSectionHeader(parent, {
+    text = U.L("SETTINGS_MINIMAP_GROUP_ICONS"),
+    width = pageWidth,
+    y = -110,
+  })
+  table.insert(widgets, listHeader)
+
+  local candidates = U.MinimapGroupCandidates()
+  local firstBox
+  local i
+  for i = 1, table.getn(candidates) do
+    local entry = candidates[i]
+    local row = math.floor((i - 1) / 2)
+    local column = (i - 1) - row * 2
+    local control = U.CreateCheckbox(parent, {
+      name = "PandaUIMinimapGroupIcon" .. i,
+      text = entry.label,
+      textWidth = columnWidth - 20,
+      value = not group.Config().ungrouped[entry.name],
+      onChange = function(value)
+        group.Config().ungrouped[entry.name] = (not value) and true or nil
+        group.Apply()
+      end,
+    })
+    if i == 1 then
+      control.SetPoint("TOPLEFT", listHeader.title, "BOTTOMLEFT", 0, -8)
+      firstBox = control.box
+    else
+      control.SetPoint("TOPLEFT", firstBox, "TOPLEFT",
+                       column * columnWidth, -row * 22)
+    end
+    table.insert(controls, { control = control, name = entry.name })
+    table.insert(widgets, control)
+  end
+
+  local function Refresh()
+    local cfg = group.Config()
+    enable.SetValue(cfg.groupIcons and true or false)
+    local n
+    for n = 1, table.getn(controls) do
+      controls[n].control.SetValue(not cfg.ungrouped[controls[n].name])
+    end
+  end
+
+  return widgets, Refresh
+end
+
+function MM:OnInit()
+  if type(U.RegisterSettingsTab) == "function" then
+    U.RegisterSettingsTab("minimap", U.L("SETTINGS_PAGE_MINIMAP"), BuildSettingsPage,
+                          { after = "general" })
+  end
+end
+
 function MM:OnEnable()
   if self.button then return end
 
@@ -887,10 +1370,21 @@ function MM:OnEnable()
 
   -- After the theme has placed the native icons, so /pui reset returns them
   -- there. Own pcall: a failure must not take the mail letter down with it.
+  local groupOk, groupErr = pcall(group.CreateLauncher, minimap)
+  if not groupOk then
+    U.Error("minimap group launcher: " .. tostring(groupErr))
+  end
   local ringOk, ringErr = pcall(ring.Setup)
   if not ringOk then
     U.Error("minimap ring icons: " .. tostring(ringErr))
   end
+  local applyOk, applyErr = pcall(group.Apply)
+  if not applyOk then
+    U.Error("minimap grouping: " .. tostring(applyErr))
+  end
+  -- Other addons create their minimap buttons while loading; by entering the
+  -- world they all exist and can join the group.
+  U.RegisterEvent("PLAYER_ENTERING_WORLD", function() pcall(group.Apply) end)
 
   -- Last, and inside its own pcall. RunModulePhase already wraps OnEnable, so
   -- an error raised here would abort the whole method -- and everything above

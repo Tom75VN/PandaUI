@@ -12,9 +12,9 @@ local M = U.media
 
 local rfs = {
   GROUP = "raidframes",
-  PAGE_WIDTH = 484,
-  COL2 = 250,
-  HALF_TEXT = 220,
+  PAGE_WIDTH = U.SETTINGS_PAGE_WIDTH,
+  COL2 = U.SETTINGS_COLUMN_X,
+  HALF_TEXT = U.SETTINGS_COLUMN_WIDTH - 26,
   SLIDER_WIDTH = 200,
   refresh = nil,     -- the shown page's re-read, for /pui raid toggles
 }

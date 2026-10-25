@@ -17,9 +17,9 @@ local M = U.media
 
 local nps = {
   GROUP = "nameplates",
-  PAGE_WIDTH = 484,
-  COL2 = 250,       -- second column, x
-  HALF_TEXT = 220,  -- label width of a two-column checkbox
+  PAGE_WIDTH = U.SETTINGS_PAGE_WIDTH,
+  COL2 = U.SETTINGS_COLUMN_X,       -- second column, x
+  HALF_TEXT = U.SETTINGS_COLUMN_WIDTH - 26,  -- label width of a two-column checkbox
   SLIDER_WIDTH = 200,
   HINT_LINE = 13,   -- reserve per wrapped description line
 }

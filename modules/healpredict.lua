@@ -731,7 +731,7 @@ function U.BuildHealPredictSettings(parent, y, width)
 
   local header = U.CreateSectionHeader(parent, {
     text = U.L("HEALPREDICT_HEADER"),
-    width = width or 484,
+    width = width or U.SETTINGS_PAGE_WIDTH,
     y = y,
   })
   table.insert(widgets, header)
@@ -739,7 +739,7 @@ function U.BuildHealPredictSettings(parent, y, width)
   local enable = U.CreateCheckbox(parent, {
     name = "PandaUISettingsHealPredictEnabled",
     text = U.L("HEALPREDICT_ENABLED"),
-    textWidth = 232,
+    textWidth = U.SETTINGS_COLUMN_X - 26,
     value = U.GetHealPredictSetting("enabled"),
     onChange = function(value) U.SetHealPredictSetting("enabled", value) end,
   })
@@ -754,7 +754,7 @@ function U.BuildHealPredictSettings(parent, y, width)
     color = M.color.textDim,
     inherits = "GameFontNormalSmall",
     justify = "LEFT",
-    width = width or 484,
+    width = width or U.SETTINGS_PAGE_WIDTH,
   })
   if hint then
     U.AnchorSettingsDescription(hint, enable.box)

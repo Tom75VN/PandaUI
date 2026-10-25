@@ -80,6 +80,7 @@ function DF:OnEnable()
   U.RegisterMover("durability", anchor, {
     label = U.L("MOVER_LABEL_DURABILITY"),
     default = default,
+    scalable = true,
   })
 
   -- The paper doll only appears once something is actually damaged, so the

@@ -683,6 +683,7 @@ local function RegisterQuestWatchMover()
 
   U.RegisterMover("questwatch.frame", watch, {
     label = U.L("MOVER_LABEL_QUEST_TRACKER"),
+    scalable = true,
   })
   return true
 end

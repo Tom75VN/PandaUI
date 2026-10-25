@@ -32,6 +32,7 @@ local UFC = U.RegisterModule("unitframeconfig")
 local PLAYER_MOVER_ID = "unitframes.player"
 local TARGET_MOVER_ID = "unitframes.target"
 local TARGET_TARGET_MOVER_ID = "unitframes.targettarget"
+local PET_MOVER_ID = "unitframes.pet"
 local PARTY_MOVER_ID = "unitframes.party"
 
 -- Two columns, the same shape the settings pages use, kept narrow enough to sit
@@ -48,6 +49,8 @@ local LABEL_WIDTH = COLUMN_X - 20
 -- and a full-width selector would read as the panel's own control rather than
 -- the section's.
 local DROPDOWN_WIDTH = 200
+local HEALTH_DROPDOWN_WIDTH = COLUMN_X - 8
+local HEALTH_SECTION_HEIGHT = 68
 
 local function ModernPortraits()
   return type(U.GetActiveThemeStyle) == "function" and
@@ -129,7 +132,7 @@ local function PanelHeight(def)
   local layout = Layout(def)
   local bottom = layout.auraBottom + 14
   if ComboClass() then bottom = layout.comboRow + 24 end
-  return -U.MoverPanelContentTop() + bottom + 12
+  return -U.MoverPanelContentTop() + HEALTH_SECTION_HEIGHT + bottom + 12
 end
 
 -- Places one checkbox in the two-column grid: column 0 or 1, row counted from
@@ -156,6 +159,86 @@ local function AddCaption(frame, widgets, pad, y, text, width)
   caption:SetText(text)
   table.insert(widgets, caption)
   return caption
+end
+
+-- The global health readout appears in the integrated settings page and beside
+-- every mover whose frame actually carries a health value. These controls use
+-- the same accessors as that page, so changing either view updates all frames.
+local function BuildHealthTextControls(frame, pad, contentTop, widgets,
+                                       controls, namePrefix)
+  AddCaption(frame, widgets, pad, contentTop, U.L("UF_HEALTH_TEXT_HEADER"),
+             CONTENT_WIDTH)
+
+  local leftLabel = U.CreateSettingsLabel(frame, {
+    size = M.fontSize.small,
+    color = M.color.accent,
+    inherits = "GameFontNormalSmall",
+    justify = "LEFT",
+    width = HEALTH_DROPDOWN_WIDTH,
+  })
+  if leftLabel then
+    leftLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", pad, contentTop - 22)
+    leftLabel:SetText(U.L("UF_HEALTH_TEXT_LEFT"))
+    table.insert(widgets, leftLabel)
+  end
+
+  local sideLabel = U.CreateSettingsLabel(frame, {
+    size = M.fontSize.small,
+    color = M.color.accent,
+    inherits = "GameFontNormalSmall",
+    justify = "LEFT",
+    width = HEALTH_DROPDOWN_WIDTH,
+  })
+  if sideLabel then
+    sideLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", pad + COLUMN_X,
+                       contentTop - 22)
+    sideLabel:SetText(U.L("UF_HEALTH_TEXT_RIGHT"))
+    table.insert(widgets, sideLabel)
+  end
+
+  local left = U.CreateDropdown(frame, {
+    name = namePrefix .. "HealthTextLeft",
+    width = HEALTH_DROPDOWN_WIDTH,
+    height = 24,
+    rowHeight = 20,
+    value = U.GetUnitFrameHealthTextSetting("left"),
+    items = {
+      { value = "hidden", text = U.L("UF_HEALTH_TEXT_HIDDEN") },
+      { value = "percent", text = U.L("UF_HEALTH_TEXT_PERCENT") },
+      { value = "number", text = U.L("UF_HEALTH_TEXT_VALUE") },
+    },
+    onChange = function(value)
+      U.SetUnitFrameHealthTextSetting("left", value)
+    end,
+  })
+  left.SetPoint("TOPLEFT", frame, "TOPLEFT", pad, contentTop - 38)
+  controls.healthLeft = left
+  table.insert(widgets, left)
+
+  local right = U.CreateDropdown(frame, {
+    name = namePrefix .. "HealthTextRight",
+    width = HEALTH_DROPDOWN_WIDTH,
+    height = 24,
+    rowHeight = 20,
+    value = U.GetUnitFrameHealthTextSetting("right"),
+    items = {
+      { value = "hidden", text = U.L("UF_HEALTH_TEXT_HIDDEN") },
+      { value = "percent", text = U.L("UF_HEALTH_TEXT_PERCENT") },
+      { value = "number", text = U.L("UF_HEALTH_TEXT_VALUE") },
+    },
+    onChange = function(value)
+      U.SetUnitFrameHealthTextSetting("right", value)
+    end,
+  })
+  right.SetPoint("TOPLEFT", frame, "TOPLEFT", pad + COLUMN_X,
+                 contentTop - 38)
+  controls.healthRight = right
+  table.insert(widgets, right)
+end
+
+local function RefreshHealthTextControls(controls)
+  controls.healthLeft.SetValue(U.GetUnitFrameHealthTextSetting("left"))
+  controls.healthRight.SetValue(U.GetUnitFrameHealthTextSetting("right"))
 end
 
 -- The player frame's own group, filling its columns left to right. A spec
@@ -347,19 +430,26 @@ local function BuildPanel(def, frame, contentTop, contentWidth)
   local widgets = {}
   local controls = {}
 
-  BuildGroup(frame, pad, contentTop, 0, def.toggles, widgets, controls,
+  BuildHealthTextControls(frame, pad, contentTop, widgets, controls,
+                          def.namePrefix)
+
+  BuildGroup(frame, pad, contentTop, HEALTH_SECTION_HEIGHT, def.toggles,
+             widgets, controls,
              def.namePrefix)
 
   -- The aura rows this frame carries (modules/auras.lua).
-  AddCaption(frame, widgets, pad, contentTop - layout.auraCaption,
+  AddCaption(frame, widgets, pad,
+             contentTop - HEALTH_SECTION_HEIGHT - layout.auraCaption,
              U.L("UF_TAB_AURAS"), contentWidth)
-  BuildGroup(frame, pad, contentTop, layout.auraRow, def.auras, widgets,
-             controls, def.namePrefix)
+  BuildGroup(frame, pad, contentTop,
+             HEALTH_SECTION_HEIGHT + layout.auraRow, def.auras,
+             widgets, controls, def.namePrefix)
 
   -- Which of the two frames draws the points. It is one stored value, so both
   -- panels show it and either one may write it.
   if ComboClass() then
-    AddCaption(frame, widgets, pad, contentTop - layout.comboCaption,
+    AddCaption(frame, widgets, pad,
+               contentTop - HEALTH_SECTION_HEIGHT - layout.comboCaption,
                U.L("UF_COMBO_POINTS_HEADER"), contentWidth)
 
     local anchor = U.CreateDropdown(frame, {
@@ -377,7 +467,7 @@ local function BuildPanel(def, frame, contentTop, contentWidth)
       end,
     })
     anchor.SetPoint("TOPLEFT", frame, "TOPLEFT", pad,
-                    contentTop - layout.comboRow)
+                    contentTop - HEALTH_SECTION_HEIGHT - layout.comboRow)
     controls.comboAnchor = anchor
     table.insert(widgets, anchor)
   end
@@ -385,6 +475,7 @@ local function BuildPanel(def, frame, contentTop, contentWidth)
   -- Called on every show, and again whenever a settings page or the other panel
   -- writes one of these values while this one is up.
   local function Refresh()
+    RefreshHealthTextControls(controls)
     RefreshGroup(def.toggles, controls)
     if controls.portrait3d and def.portraitFamily then
       controls.portrait3d.SetEnabled(not ModernPortraits() or
@@ -409,6 +500,10 @@ local function BuildPartyPanel(frame, contentTop, contentWidth)
   local widgets = {}
   local controls = {}
   local portraitOffset = ModernPortraits() and ROW_PITCH or 0
+
+  BuildHealthTextControls(frame, pad, contentTop, widgets, controls,
+                          "PandaUIPartyFrameMover")
+  contentTop = contentTop - HEALTH_SECTION_HEIGHT
 
   local function BeginLiveEdit()
     if type(U.FreezeMoverPanel) == "function" then U.FreezeMoverPanel() end
@@ -561,6 +656,7 @@ local function BuildPartyPanel(frame, contentTop, contentWidth)
   end
 
   local function Refresh()
+    RefreshHealthTextControls(controls)
     controls.partyPlayer.SetValue(U.GetUnitFramePartySetting("partyPlayer"))
     controls.partyPets.SetValue(U.GetUnitFramePartySetting("partyPets"))
     if controls.portrait then
@@ -576,6 +672,21 @@ local function BuildPartyPanel(frame, contentTop, contentWidth)
       local key = PARTY_HOT_SLIDERS[n].key
       controls[key].SetValue(U.GetHotSetting(key))
     end
+  end
+
+  return widgets, Refresh
+end
+
+-- The pet mover has no frame-specific layout controls; it still exposes the
+-- shared health readout because that setting changes its health bar too.
+local function BuildPetPanel(frame, contentTop)
+  local widgets = {}
+  local controls = {}
+  BuildHealthTextControls(frame, U.MoverPanelPad(), contentTop, widgets,
+                          controls, "PandaUIPetFrameMover")
+
+  local function Refresh()
+    RefreshHealthTextControls(controls)
   end
 
   return widgets, Refresh
@@ -685,11 +796,23 @@ function UFC:OnInit()
     end,
   })
 
+  U.RegisterMoverPanel(PET_MOVER_ID, {
+    name = "PandaUIPetFrameMoverSettings",
+    width = CONTENT_WIDTH + U.MoverPanelPad() * 2,
+    height = -U.MoverPanelContentTop() + HEALTH_SECTION_HEIGHT + 4,
+    build = BuildPetPanel,
+    title = function() return U.L("MOVER_LABEL_PET") end,
+    available = function()
+      return type(U.GetUnitFrameHealthTextSetting) == "function"
+    end,
+  })
+
   U.RegisterMoverPanel(PARTY_MOVER_ID, {
     name = "PandaUIPartyFrameMoverSettings",
     width = CONTENT_WIDTH + U.MoverPanelPad() * 2,
     height = function()
-      return PARTY_LAYOUT.height + (ModernPortraits() and ROW_PITCH or 0)
+      return PARTY_LAYOUT.height + HEALTH_SECTION_HEIGHT +
+             (ModernPortraits() and ROW_PITCH or 0)
     end,
     build = BuildPartyPanel,
     title = function() return U.L("MOVER_LABEL_PARTY") end,

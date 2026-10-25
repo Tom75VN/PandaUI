@@ -33,11 +33,22 @@
 local U = PandaUI
 local M = U.media
 
--- Safe width for text starting at the left edge of a settings page. The
--- current content area is 496 wide; the spare 12 pixels remain as a permanent
--- right inset. New settings descriptions should use CreateSettingsLabel so
--- future copy and localization cannot escape the panel.
-local SETTINGS_TEXT_WIDTH = 484
+-- Width every Panda UI settings page is laid out in. It fits the game settings
+-- window's page box (505 wide, less its scrollbar and the dropdown stepper
+-- pad) at full size; the 496-wide pages before it were shrunk to ~0.9 to fit,
+-- which drew their text smaller than the client's own pages (user report
+-- 2026-10-25). Pages place a second column at U.SETTINGS_COLUMN_X, and a
+-- control there may use U.SETTINGS_COLUMN_WIDTH. A hosted dropdown is resized
+-- to the client's 124 plus ~28 of stepper each side, so a left-column one ends
+-- near 152, clear of the column.
+--
+-- SETTINGS_TEXT_WIDTH is the safe width for text starting at the page's left
+-- edge, keeping a 12-unit right inset. New settings descriptions should use
+-- CreateSettingsLabel so future copy and localization cannot escape the panel.
+U.SETTINGS_PAGE_WIDTH = 460
+U.SETTINGS_COLUMN_X = 240
+U.SETTINGS_COLUMN_WIDTH = U.SETTINGS_PAGE_WIDTH - U.SETTINGS_COLUMN_X
+local SETTINGS_TEXT_WIDTH = U.SETTINGS_PAGE_WIDTH - 12
 
 -- media/arrow.tga is 25x32, so a requested glyph height picks the width that
 -- keeps the authored triangle from stretching.
@@ -835,10 +846,12 @@ function U.CreateDropdown(parent, options)
   end
 
   control.GetStepState = function()
+    if control.disabled then return false, false end
     return StepTarget(-1) ~= nil, StepTarget(1) ~= nil
   end
 
   control.StepValue = function(direction)
+    if control.disabled then return false end
     local target = StepTarget(direction)
     if not target then return false end
     return control.SetValue(items[target].value, true)
@@ -847,6 +860,41 @@ function U.CreateDropdown(parent, options)
   control.SetPoint = function(point, relative, relativePoint, x, y)
     button:ClearAllPoints()
     button:SetPoint(point, relative, relativePoint, x, y)
+  end
+
+  -- Same contract as the checkbox's SetEnabled: greyed out, closed, and
+  -- neither the menu nor the steppers change the value while off. The label's
+  -- colour is read back before dimming, so a skin's own colour (the Forever
+  -- bed's) is what returns on enable. A bed skin paints its disabled art from
+  -- the button's IsEnabled (U.Dropdown.PaintBed).
+  control.SetEnabled = function(enabled)
+    enabled = enabled and enabled ~= 0 and true or false
+    if enabled == not control.disabled then return end
+    control.disabled = not enabled
+    if enabled then
+      pcall(button.Enable, button)
+    else
+      control.SetOpen(false)
+      pcall(button.Disable, button)
+    end
+    local label = button.label
+    if label then
+      if not enabled then
+        local ok, r, g, b, a = pcall(label.GetTextColor, label)
+        if ok and r then control.labelColor = { r, g, b, a or 1 } end
+        pcall(label.SetTextColor, label, M.Unpack(M.color.textDim))
+      else
+        pcall(label.SetTextColor, label,
+              M.Unpack(control.labelColor or M.color.text))
+      end
+    end
+    if arrow then
+      pcall(arrow.SetTextColor, arrow,
+            M.Unpack(enabled and M.color.accent or M.color.textDim))
+    end
+    if type(U.Dropdown) == "table" and type(U.Dropdown.PaintBed) == "function" then
+      pcall(U.Dropdown.PaintBed, button, nil)
+    end
   end
 
   control.puiSetShown = function(shown)
@@ -887,6 +935,8 @@ function U.CreateDropdown(parent, options)
       row.label:SetPoint("LEFT", row, "LEFT", 7, U.BUTTON_LABEL_OFFSET_Y)
       pcall(row.label.SetWidth, row.label, width - 16)
       pcall(row.label.SetJustifyH, row.label, "LEFT")
+      -- item.fontId draws this row in that face (the font dropdown's preview).
+      if item.fontId then U.SetFontFace(row.label, item.fontId) end
     end
     if levelOk and tonumber(level) then
       pcall(row.SetFrameLevel, row, level + 41)
@@ -1059,17 +1109,113 @@ local function CursorFraction(area)
   return px / w, py / h
 end
 
--- The drag recipe verified on this client, shared by the square's marker and
--- the hue strip's thumb: a Button (the only widget type that receives
--- OnDragStart here), SetMovable applied immediately before each drag, and a
--- throwaway StartMoving/StopMovingOrSizing pair to collapse multi-point
--- anchors before the real StartMoving. See U.CreateSlider for the same code
--- and knowledge.json / frames.movable_drag_requires_button_handle.
+-- ---------------------------------------------------------------------------
+-- Thumb drag
 --
--- onMove(fx, fy) receives the marker's position inside `area` as 0..1
--- fractions. It is called live during the drag and once more when it ends;
--- the marker is only re-anchored after the drag stops, because repositioning
--- it mid-drag breaks the drag outright
+-- The one press-and-drag mechanism for every value slider in pandaUI: the
+-- settings slider (U.CreateSlider), the colour picker's square and hue strip,
+-- and the game-settings rows (modules/gamesettingslist.lua). A fix to how a
+-- thumb follows the mouse belongs here, never in a caller.
+--
+-- The press starts the drag. OnDragStart only fires once the cursor has
+-- travelled the client's drag threshold, which made thumbs sit still and then
+-- jump (USER_CONFIRMED_INGAME, widgets.slider_thumb_waits_for_drag_threshold).
+-- The press also starts the move recipe proven on this client (as
+-- core/mover.lua): SetMovable right before, a throwaway StartMoving /
+-- StopMovingOrSizing pair to collapse the anchor, then the real StartMoving.
+-- The moved handle stays under the cursor, so the release lands on it.
+--
+-- Callers never re-anchor the handle during a drag, and never call GetPoint
+-- on it (frames.getpoint_after_native_move_access_violation); they re-anchor
+-- it in onRelease, after StopMovingOrSizing has run.
+--
+-- handle: a Button. options:
+--   ticker     shared-driver id (core/init.lua U.RegisterUpdate)
+--   onPress()  read the grab point; return false to refuse the drag
+--   onMove()   every frame while held, and once right after the press
+--   onRelease() once, after the native move stopped
+-- Returns { Finish = fn, IsActive = fn }. Finish is idempotent: the handle's
+-- OnMouseUp, OnDragStop and OnHide can all arrive.
+-- ---------------------------------------------------------------------------
+function U.AttachThumbDrag(handle, options)
+  options = options or {}
+  local ticker = options.ticker or ("thumbdrag." .. tostring(handle))
+  local drag = { active = false, moving = false }
+
+  pcall(handle.EnableMouse, handle, true)
+  pcall(handle.RegisterForDrag, handle, "LeftButton")
+
+  -- IsMouseButtonDown is not documented on this client, so this only ends a
+  -- drag where it exists; the handle's own scripts are the release paths.
+  local function StillDown()
+    local fn = U.G("IsMouseButtonDown")
+    if type(fn) ~= "function" then return true end
+    local ok, down = pcall(fn, "LeftButton")
+    if not ok then return true end
+    return down and down ~= 0 and true or false
+  end
+
+  local function StartNativeMove()
+    if drag.moving then return end
+    if not pcall(handle.SetMovable, handle, true) then return end
+    if pcall(handle.StartMoving, handle) then
+      pcall(handle.StopMovingOrSizing, handle)
+    end
+    drag.moving = pcall(handle.StartMoving, handle) and true or false
+  end
+
+  function drag.Finish()
+    if not drag.active then return end
+    drag.active = false
+    drag.moving = false
+    U.UnregisterUpdate(ticker)
+    pcall(handle.StopMovingOrSizing, handle)
+    if type(options.onRelease) == "function" then options.onRelease() end
+  end
+
+  function drag.IsActive() return drag.active end
+
+  local function Tick()
+    if not StillDown() then
+      drag.Finish()
+      return
+    end
+    if type(options.onMove) == "function" then options.onMove() end
+  end
+
+  local function Begin()
+    if drag.active then return end
+    if type(options.onPress) == "function" and options.onPress() == false then
+      return
+    end
+    drag.active = true
+    StartNativeMove()
+    U.RegisterUpdate(ticker, 0, Tick)
+    if type(options.onMove) == "function" then options.onMove() end
+  end
+
+  handle:SetScript("OnMouseDown", function()
+    if arg1 and arg1 ~= "LeftButton" then return end
+    Begin()
+  end)
+  handle:SetScript("OnMouseUp", drag.Finish)
+  -- Fallback start, should the press not have reached the handle.
+  handle:SetScript("OnDragStart", function()
+    Begin()
+    if drag.active then StartNativeMove() end
+  end)
+  handle:SetScript("OnDragStop", drag.Finish)
+  handle:SetScript("OnHide", drag.Finish)
+  return drag
+end
+
+-- The colour picker's square marker and hue thumb. The marker is itself the
+-- natively moved handle, so it is drawn where the client moves it.
+--
+-- onMove(fx, fy, dragging) receives the marker's position inside `area` as
+-- 0..1 fractions: live while held (dragging = true) and once after release.
+-- The marker is only re-anchored after the release, because repositioning it
+-- mid-drag breaks the drag outright
 -- (knowledge.json / widgets.thumb_reposition_during_drag_breaks_drag).
 local function AttachDragMarker(area, marker, ticker, onMove)
   -- No `select` here: this client is Vanilla-era Lua and nothing else in
@@ -1101,24 +1247,17 @@ local function AttachDragMarker(area, marker, ticker, onMove)
     return Clamp01(fx), Clamp01(fy)
   end
 
-  marker:SetScript("OnDragStart", function()
-    if not pcall(marker.SetMovable, marker, true) then return end
-    if pcall(marker.StartMoving, marker) then
-      pcall(marker.StopMovingOrSizing, marker)
-    end
-    pcall(marker.StartMoving, marker)
-    U.RegisterUpdate(ticker, 0, function()
+  return U.AttachThumbDrag(marker, {
+    ticker = ticker,
+    onMove = function()
       local fx, fy = ReadFraction()
       if fx then onMove(fx, fy, true) end
-    end)
-  end)
-
-  marker:SetScript("OnDragStop", function()
-    U.UnregisterUpdate(ticker)
-    pcall(marker.StopMovingOrSizing, marker)
-    local fx, fy = ReadFraction()
-    if fx then onMove(fx, fy, false) end
-  end)
+    end,
+    onRelease = function()
+      local fx, fy = ReadFraction()
+      if fx then onMove(fx, fy, false) end
+    end,
+  })
 end
 
 -- One shared dialog serves every colour picker: only one can be open at a
@@ -1850,9 +1989,11 @@ function U.CreateSlider(parent, options)
   end
 
   -- Converts the cursor's X position to a value and a legal thumb offset.
-  -- Every geometry read is guarded so a control that has not laid out yet
-  -- simply keeps its last valid value instead of jumping.
-  local function ReadCursorValue()
+  -- `grab` is where inside the square the cursor holds it (0..THUMB_WIDTH);
+  -- without one the cursor owns the centre. Every geometry read is guarded so
+  -- a control that has not laid out yet simply keeps its last valid value
+  -- instead of jumping.
+  local function ReadCursorValue(grab)
     if type(GetCursorPosition) ~= "function" then return nil end
 
     local cursorOk, cursorX = pcall(GetCursorPosition)
@@ -1868,29 +2009,33 @@ function U.CreateSlider(parent, options)
     local usable = trackWidth - THUMB_WIDTH
     if usable <= 0 then return nil end
 
-    -- The cursor owns the thumb centre. Clamping the left-edge offset to the
-    -- usable span keeps both circular edges inside their matching track edge.
-    local offset = cursorX / scale - trackLeft - THUMB_WIDTH / 2
+    -- Clamping the left-edge offset to the usable span keeps both edges of
+    -- the square inside their matching track edge.
+    local offset = cursorX / scale - trackLeft - (grab or THUMB_WIDTH / 2)
     if offset < 0 then offset = 0 end
     if offset > usable then offset = usable end
 
     return min + offset / usable * (max - min), offset
   end
 
-  -- Runs on the shared driver (core/init.lua's U.RegisterUpdate) instead of an
-  -- OnUpdate on the thumb itself, per scripts.child_onupdate_unreliable.
-  local dragTicker = "slider." .. (options.name or tostring(thumb))
-  local dragging = false
-
-  -- OnDragStop is expected after the proven StartMoving recipe below. The
-  -- button-state check is a second teardown path for a missed callback, which
-  -- otherwise leaves an every-frame cursor follower running indefinitely.
-  local function LeftButtonStillDown()
-    if type(IsMouseButtonDown) ~= "function" then return true end
-    local ok, down = pcall(IsMouseButtonDown, "LeftButton")
-    if not ok then return true end
-    return down and true or false
+  -- Where inside the visible square the cursor pressed it, so the square does
+  -- not jump to centre itself under the cursor when the drag begins.
+  local function ReadGrab()
+    if type(GetCursorPosition) ~= "function" then return nil end
+    local cursorOk, cursorX = pcall(GetCursorPosition)
+    local scaleOk, scale = pcall(visual.GetEffectiveScale, visual)
+    local leftOk, left = pcall(visual.GetLeft, visual)
+    if not (cursorOk and scaleOk and leftOk and tonumber(cursorX) and
+            tonumber(scale) and scale > 0 and tonumber(left)) then
+      return nil
+    end
+    local grab = cursorX / scale - left
+    if grab < 0 then grab = 0 end
+    if grab > THUMB_WIDTH then grab = THUMB_WIDTH end
+    return grab
   end
+
+  local dragGrab, pressValue, moved
 
   local inputActive = false
   local function BeginInput()
@@ -1905,56 +2050,49 @@ function U.CreateSlider(parent, options)
     if type(options.onInputEnd) == "function" then options.onInputEnd() end
   end
 
-  local function FinishDrag()
-    if not dragging then return end
-    dragging = false
-    U.UnregisterUpdate(dragTicker)
-    pcall(thumb.StopMovingOrSizing, thumb)
-
-    local value = ReadCursorValue()
-    if value then
-      Publish(value)
-    else
-      PlaceThumb(control.current or min)
-    end
-    EndInput()
-  end
-
-  local function LiveReadoutFromDrag()
-    if not LeftButtonStillDown() then
-      FinishDrag()
-      return
-    end
-
-    local value, offset = ReadCursorValue()
+  -- Only the visible square moves; the input Button is moved by the client
+  -- and re-anchored by PlaceThumb on release.
+  local function Follow()
+    local value, offset = ReadCursorValue(dragGrab)
     if not value then return end
-
     visual:ClearAllPoints()
     visual:SetPoint("LEFT", track, "LEFT", offset, 0)
     local stepped = UpdateReadout(value)
-    if type(options.onInput) == "function" and
-       control.lastInput ~= stepped then
+    if control.lastInput ~= stepped then
       control.lastInput = stepped
-      options.onInput(stepped)
+      moved = true
+      if type(options.onInput) == "function" then options.onInput(stepped) end
     end
   end
 
-  thumb:SetScript("OnDragStart", function()
-    if not control.enabled then return end
-    if not pcall(thumb.SetMovable, thumb, true) then return end
-    if pcall(thumb.StartMoving, thumb) then
-      pcall(thumb.StopMovingOrSizing, thumb)
-    end
-    if not pcall(thumb.StartMoving, thumb) then return end
-
-    dragging = true
-    control.lastInput = nil
-    BeginInput()
-    U.RegisterUpdate(dragTicker, 0, LiveReadoutFromDrag)
-    LiveReadoutFromDrag()
-  end)
-
-  thumb:SetScript("OnDragStop", FinishDrag)
+  -- The shared mechanism (U.AttachThumbDrag) owns press, move and release.
+  local drag = U.AttachThumbDrag(thumb, {
+    ticker = "slider." .. (options.name or tostring(thumb)),
+    onPress = function()
+      if not control.enabled then return false end
+      dragGrab = ReadGrab() or THUMB_WIDTH / 2
+      pressValue = Clamp(control.current or min)
+      moved = false
+      control.lastInput = pressValue
+      BeginInput()
+    end,
+    onMove = Follow,
+    onRelease = function()
+      local value = ReadCursorValue(dragGrab)
+      if value then
+        -- A press released where it started changes nothing, so it stays
+        -- silent; anything previewed through onInput is always published.
+        local silent = not moved and Clamp(value) == pressValue
+        Publish(value, silent)
+      else
+        PlaceThumb(control.current or min)
+      end
+      dragGrab, pressValue, moved = nil, nil, nil
+      EndInput()
+    end,
+  })
+  local FinishDrag = drag.Finish
+  track:SetScript("OnHide", FinishDrag)
 
   -- The track itself is a direct-position surface: a click publishes the
   -- nearest stepped value and places both the input handle and visible square.
@@ -3161,6 +3299,66 @@ function U.HideWindowTooltip()
 end
 
 -- ---------------------------------------------------------------------------
+-- Red close X
+--
+-- The modern-wow red-button atlas's close cell on an addon-owned Button, for
+-- a window that carries it under every theme (the game settings window, the
+-- edit-mode windows). Four cells swapped by the addon's own textures, never
+-- the button's state slots given a path
+-- (widgets.setthumbtexture_path_shares_one_thumb): resting, pushed while
+-- held, and the atlas's glow added on hover. The caller places it and keeps
+-- it above any drag handle under it.
+-- options: name, size (default 17), onClick.
+-- ---------------------------------------------------------------------------
+function U.CreateRedCloseButton(parent, options)
+  options = options or {}
+  local cells = M.modernWow and M.modernWow.redButtonCell
+  local path = M.modernWow and M.modernWow.texture and M.modernWow.texture.redButton
+  if not parent or not cells or not path then return nil end
+  local ok, button = pcall(CreateFrame, "Button", options.name, parent)
+  if not ok or not button then return nil end
+  local size = options.size or 17
+  button:SetWidth(size)
+  button:SetHeight(size)
+  pcall(button.EnableMouse, button, true)
+
+  local function Piece(layer)
+    local made, texture = pcall(button.CreateTexture, button, nil, layer)
+    if not made or not texture then return nil end
+    pcall(texture.SetTexture, texture, path)
+    pcall(texture.SetAllPoints, texture, button)
+    return texture
+  end
+  local face, glow = Piece("ARTWORK"), Piece("OVERLAY")
+  if not face then return button end
+  if glow then
+    pcall(glow.SetTexCoord, glow, cells.highlight[1], cells.highlight[2],
+          cells.highlight[3], cells.highlight[4])
+    pcall(glow.SetBlendMode, glow, "ADD")
+    pcall(glow.Hide, glow)
+  end
+
+  local state = { over = false, down = false }
+  local function Paint()
+    local cell = state.down and cells.closePushed or cells.closeNormal
+    pcall(face.SetTexCoord, face, cell[1], cell[2], cell[3], cell[4])
+    if glow then
+      if state.over then pcall(glow.Show, glow) else pcall(glow.Hide, glow) end
+    end
+  end
+  local onClick = options.onClick
+  button:SetScript("OnEnter", function() state.over = true; Paint() end)
+  button:SetScript("OnLeave", function() state.over = false; state.down = false; Paint() end)
+  button:SetScript("OnMouseDown", function() state.down = true; Paint() end)
+  button:SetScript("OnMouseUp", function() state.down = false; Paint() end)
+  button:SetScript("OnClick", function()
+    if type(onClick) == "function" then onClick() end
+  end)
+  Paint()
+  return button
+end
+
+-- ---------------------------------------------------------------------------
 -- Confirmation dialog
 --
 -- One shared modal for "are you sure" actions (delete greys, buy a bank slot).
@@ -3180,10 +3378,11 @@ end
 -- no caller's flat dialog ever has to undo that art; U.ModernWowMetalFrame and
 -- U.ModernWowRedButtonFace return false outside the theme, which falls back to
 -- the flat instance.
-local confirmDialog, confirmDialogWow
+local confirmDialog, confirmDialogWow, confirmDialogEdit
 
-local function BuildConfirmDialog(wow)
-  local suffix = wow and "ModernWow" or ""
+-- suffix names the instance's frames: "" (flat), "ModernWow", "EditMode".
+local function BuildConfirmDialog(suffix)
+  suffix = suffix or ""
   local dialog = U.CreatePanel(UIParent, {
     name = "PandaUIConfirm" .. suffix,
     width = 280,
@@ -3288,6 +3487,48 @@ local function DressConfirmWowButton(button, width, height)
   return true
 end
 
+-- Edit mode's instance, under every theme (user request, 2026-10-25): the
+-- same metal housing as the edit windows (U.ModernWowMetalFrame forced) and
+-- their game-settings 128RedButton faces, at the Modern WoW instance's size
+-- and button pair geometry. Callers pass options.editMode.
+local function BuildConfirmDialogEdit()
+  if type(U.ModernWowMetalFrame) ~= "function" or
+     type(U.StyleGameSettingsWidgets) ~= "function" then
+    return nil
+  end
+  local token = M.modernWow and M.modernWow.confirmDialog
+  local button = M.modernWow and M.modernWow.corpsePopupButton
+  if not token or not button then return nil end
+
+  local dialog = BuildConfirmDialog("EditMode")
+  pcall(dialog.SetWidth, dialog, token.width)
+  pcall(dialog.SetHeight, dialog, token.height)
+  if not U.ModernWowMetalFrame(dialog, token.width, token.height, true) then
+    return nil
+  end
+  U.SetBackdropShown(dialog, false)
+  if dialog.text then
+    U.SetStockFont(dialog.text, M.fontSize.normal, M.color.text)
+  end
+
+  local width = math.min(token.buttonWidth,
+    (token.width - 2 * button.sideInset - button.pairGap) / 2)
+  local pair = { dialog.accept, dialog.cancel }
+  local i
+  for i = 1, 2 do
+    pcall(pair[i].SetWidth, pair[i], width)
+    pcall(pair[i].SetHeight, pair[i], button.height)
+  end
+  U.StyleGameSettingsWidgets(pair, true)
+  dialog.accept:ClearAllPoints()
+  dialog.accept:SetPoint("BOTTOMRIGHT", dialog, "BOTTOM", -button.pairGap / 2,
+                         token.buttonBottom)
+  dialog.cancel:ClearAllPoints()
+  dialog.cancel:SetPoint("BOTTOMLEFT", dialog, "BOTTOM", button.pairGap / 2,
+                         token.buttonBottom)
+  return dialog
+end
+
 -- Returns the dressed dialog, or nil when the theme's art is unavailable.
 local function BuildConfirmDialogWow()
   if type(U.ModernWowMetalFrame) ~= "function" or
@@ -3297,7 +3538,7 @@ local function BuildConfirmDialogWow()
   local token = M.modernWow and M.modernWow.confirmDialog
   if not token then return nil end
 
-  local dialog = BuildConfirmDialog(true)
+  local dialog = BuildConfirmDialog("ModernWow")
   -- The metal frame follows the dialog's own anchors; its width/height
   -- arguments only size the corner arms, so the panel itself is resized.
   pcall(dialog.SetWidth, dialog, token.width)
@@ -3343,7 +3584,17 @@ function U.ShowConfirm(options)
      (type(options.modernWowModule) == "string" and
       type(U.ClassicModernModuleEnabled) == "function" and
       U.ClassicModernModuleEnabled(options.modernWowModule)))
-  if modernWow then
+  -- Any confirmation raised while edit mode is open (its Reset, a mover
+  -- panel's reload prompt) wears edit mode's housing.
+  local editMode = options.editMode or
+    (type(U.IsUnlocked) == "function" and U.IsUnlocked())
+  if editMode then
+    if confirmDialogEdit == nil then
+      local ok, built = pcall(BuildConfirmDialogEdit)
+      confirmDialogEdit = ok and built or false
+    end
+    dialog = confirmDialogEdit or nil
+  elseif modernWow then
     if confirmDialogWow == nil then
       local ok, built = pcall(BuildConfirmDialogWow)
       confirmDialogWow = ok and built or false
@@ -3358,6 +3609,9 @@ function U.ShowConfirm(options)
   if confirmDialog and confirmDialog ~= dialog then confirmDialog:Hide() end
   if confirmDialogWow and confirmDialogWow ~= dialog then
     confirmDialogWow:Hide()
+  end
+  if confirmDialogEdit and confirmDialogEdit ~= dialog then
+    confirmDialogEdit:Hide()
   end
   dialog.puiOwner = options.owner
   dialog:ClearAllPoints()
@@ -3424,9 +3678,9 @@ function U.ShowConfirm(options)
 end
 
 function U.HideConfirm(owner)
-  local dialogs = { confirmDialog, confirmDialogWow }
+  local dialogs = { confirmDialog, confirmDialogWow, confirmDialogEdit }
   local i
-  for i = 1, 2 do
+  for i = 1, 3 do
     local dialog = dialogs[i]
     if dialog and (not owner or dialog.puiOwner == owner) then dialog:Hide() end
   end

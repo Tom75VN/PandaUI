@@ -99,15 +99,18 @@ function L.Contains(value, query)
   return string.find(U.SearchFold(value), U.SearchFold(query), 1, true) ~= nil
 end
 
+-- L.scopeHit (set by L.Layout): the open category or sub-row matches by name,
+-- so all of its rows are shown.
 function L.Matches(section, control)
   local query = L.filter or ""
-  return query == "" or L.Contains(section and section.title, query) or
+  return query == "" or L.scopeHit or L.Contains(section and section.title, query) or
          L.Contains(control and control.label, query)
 end
 
 function L.SetFilter(text)
   L.filter = L.FilterValue(text)
   L.offset = 0
+  if L.filter ~= "" then L.EnsureIndexed() end
   -- Deferred so a page this call selects has attached before it is filtered.
   if type(L.SyncBindingFilter) == "function" then
     U.DeferOnce("gamesettings:bindingsearch", L.SyncBindingFilter)
@@ -128,10 +131,13 @@ function L.SetFilter(text)
     if page and (not gs.active or gs.active.id ~= page.id) and
        type(gs.SelectPage) == "function" then
       gs.SelectPage(page.id)
+      L.RevealHit()
       return
     end
   end
 
+  -- Within the category: open the first sub-row with a hit.
+  L.RevealHit()
   if L.active then
     L.Layout(L.active)
   elseif type(gs.RenderList) == "function" then
@@ -416,15 +422,7 @@ function L.Discover(page, frame)
     -- trimmed label never becomes the source of the next trim.
     for j = 1, table.getn(model[i].controls) do
       local control = model[i].controls[j]
-      if control.kind == "button" then
-        -- A button's text is its own, not a separate label FontString.
-        control.label = gs.Read(U.G(control.name), "GetText")
-      else
-        local label = U.G(control.labelName or
-                          (control.name ..
-                           (control.kind == "dropdown" and "Label" or "Text")))
-        control.label = gs.Read(label, "GetText")
-      end
+      control.label = L.ControlLabel(control)
     end
     -- A bar the client drew on the same line as a button belongs to it -- the
     -- microphone level beside Test Microphone -- so it rides that button's
@@ -446,7 +444,21 @@ function L.Discover(page, frame)
   -- A page can build controls lazily on its first Show. Replace any earlier
   -- search-only scan with this authoritative model once it exists.
   L.searchIndex[page.id] = nil
+  if page.nativeCategories and page.nativeSelected then
+    L.RecordNative(page.nativeSelected, model)
+  end
   return model
+end
+
+-- A control's label: a button's own text, else its label FontString.
+function L.ControlLabel(control)
+  if control.kind == "button" then
+    return gs.Read(U.G(control.name), "GetText")
+  end
+  local label = U.G(control.labelName or
+                    (control.name ..
+                     (control.kind == "dropdown" and "Label" or "Text")))
+  return gs.Read(label, "GetText")
 end
 
 -- ---------------------------------------------------------------------------
@@ -806,18 +818,251 @@ function L.InvalidateSearch(page)
   if page then L.searchIndex[page.id] = nil end
 end
 
-function L.PageMatches(page, query)
-  if type(gs.PageAvailable) == "function" and not gs.PageAvailable(page) then
-    return false
-  end
-  query = L.FilterValue(query or L.filter)
-  if query == "" then return true end
+function L.ValuesMatch(page, query)
   local values = L.SearchValues(page)
   local i
   for i = 1, table.getn(values) do
     if L.Contains(values[i], query) then return true end
   end
   return false
+end
+
+function L.PageMatches(page, query)
+  if type(gs.PageAvailable) == "function" and not gs.PageAvailable(page) then
+    return false
+  end
+  query = L.FilterValue(query or L.filter)
+  if query == "" then return true end
+  -- Another query than the window's own: the page-wide scan only.
+  if query ~= L.FilterValue(L.filter) then return L.ValuesMatch(page, query) end
+  if L.Hit(L.PageLabel(page)) then return true end
+  local tabs = L.MatchingTabs(page)
+  if tabs then return table.getn(tabs) > 0 end
+  return L.ValuesMatch(page, query)
+end
+
+-- ---------------------------------------------------------------------------
+-- Per-category hits (roadmap: one search over client options, key bindings
+-- and every loaded suite addon's options)
+--
+-- A category row is listed while a query is active only if it holds a hit,
+-- and beneath it only the sub-rows that do; clicking one opens that page.
+--
+--   * Panda UI and each sibling addon (pandaQuest, pandaMap, any later one
+--     that registers pages through modules/settings.lua): every page is built
+--     once, hidden, on the first query, and matched on the text its widgets
+--     show (U.IndexIntegratedSettings). An addon that is not loaded registers
+--     nothing, so it is not listed.
+--   * Video / Sound / Interface: OctoWoW refills the same numbered wrappers
+--     for every leaf category (knowledge.json /
+--     frames.octowow_consolidated_options_inventory), so a frame scan only
+--     ever sees the category last clicked. Each leaf's labels are recorded
+--     when it is displayed (L.Discover) and, on the first query, by clicking
+--     through the leaves not recorded yet (L.SweepNative).
+--   * Key Bindings: the client's binding table, as before.
+-- ---------------------------------------------------------------------------
+L.nativeIndex = {}   -- [leaf category index] = labels shown in that leaf
+L.memo = {}          -- [text] = whether it holds the current query
+
+-- The current query's verdict on one text, cached until the query changes:
+-- the category list asks the same questions on every render.
+function L.Hit(value)
+  local query = L.FilterValue(L.filter)
+  if L.memoQuery ~= query then
+    L.memo = {}
+    L.memoQuery = query
+  end
+  if type(value) ~= "string" then return query == "" end
+  local hit = L.memo[value]
+  if hit == nil then
+    hit = L.Contains(L.Plain(value), query) and true or false
+    L.memo[value] = hit
+  end
+  return hit
+end
+
+function L.Plain(text)
+  if type(text) ~= "string" then return text end
+  text = string.gsub(text, "|c%x%x%x%x%x%x%x%x", "")
+  text = string.gsub(text, "|r", "")
+  return text
+end
+
+-- The category's name as its row shows it.
+function L.PageLabel(page)
+  if not page then return nil end
+  if page.addonCategory then return page.label end
+  return U.L(page.label)
+end
+
+-- Labels of the controls the current leaf shows, with their section titles.
+function L.RecordNative(index, model)
+  local values = {}
+  local i, j
+  for i = 1, table.getn(model) do
+    local section = model[i]
+    local any = false
+    for j = 1, table.getn(section.controls) do
+      local control = section.controls[j]
+      local object = U.G(control.name)
+      if object and L.ControlShown(control, object) then
+        L.AddSearchValue(values, control.label or L.ControlLabel(control))
+        any = true
+      end
+    end
+    if any then L.AddSearchValue(values, section.title) end
+  end
+  -- An empty read is not kept: the leaf may not have been filled yet.
+  if table.getn(values) > 0 then L.nativeIndex[index] = values end
+end
+
+-- Reads the leaf the client currently has filled, without moving anything.
+function L.ReadNative(page, index)
+  local frame = U.G(page.frame)
+  if not frame then return end
+  local root = U.G(page.frame .. "Content") or frame
+  local model = {}
+  L.Walk(root, 1, { container = nil, native = true }, model)
+  local i, j
+  for i = 1, table.getn(model) do
+    for j = 1, table.getn(model[i].controls) do
+      local control = model[i].controls[j]
+      control.label = L.ControlLabel(control)
+    end
+  end
+  L.RecordNative(index, model)
+end
+
+-- Clicks through every leaf category not indexed yet and reads it, the same
+-- click a sub-row makes (gs.SelectNativeCategory). Only once the client panel
+-- has been hosted this session: before its first show it is not laid out
+-- (gamesettings.lua header), and a leaf read then would be empty anyway. A
+-- hosted list is handed back to the client first and re-attached on the leaf
+-- it showed, exactly as a sub-row click does.
+function L.SweepNative()
+  if L.sweeping or not gs.nativeShown then return end
+  local pending = {}
+  local i, j
+  for i = 1, table.getn(gs.PAGES) do
+    local page = gs.PAGES[i]
+    if type(page.nativeCategories) == "table" then
+      for j = 1, table.getn(page.nativeCategories) do
+        local index = page.nativeCategories[j]
+        if not L.nativeIndex[index] and not L.nativeTried[index] then
+          table.insert(pending, { page = page, index = index })
+        end
+      end
+    end
+  end
+  L.sweepDone = true
+  if table.getn(pending) == 0 then return end
+
+  local hosted = gs.active
+  if not hosted or not hosted.nativeCategories or L.active ~= hosted then
+    hosted = nil
+  end
+  L.sweeping = true
+  if hosted then L.BeforeNativeCategory(hosted) end
+  for i = 1, table.getn(pending) do
+    local item = pending[i]
+    -- Tried once per session: a leaf that reads empty is not clicked again
+    -- on every keystroke.
+    L.nativeTried[item.index] = true
+    local button = U.G(gs.NativeCategoryName(item.index))
+    if button and type(button.Click) == "function" and
+       pcall(button.Click, button) then
+      L.ReadNative(item.page, item.index)
+    end
+  end
+  if hosted then
+    gs.SelectNativeCategory(hosted, hosted.nativeSelected or
+                                    hosted.nativeCategories[1], true)
+  end
+  L.sweeping = false
+end
+L.nativeTried = {}
+
+-- Everything the first query needs indexed. Runs once per query change; each
+-- part does nothing once its work is done.
+function L.EnsureIndexed()
+  L.SweepNative()
+  if type(U.IndexIntegratedSettings) == "function" then
+    pcall(U.IndexIntegratedSettings, gs.host)
+  end
+end
+
+-- The sub-rows of a page holding a hit for the current query, or nil when the
+-- page has no per-row index (Key Bindings, whose own list is filtered).
+function L.MatchingTabs(page)
+  if not page then return nil end
+  if page.settings then
+    if type(U.GetIntegratedSettingsMatches) ~= "function" then return nil end
+    if not gs.PageAvailable(page) then return {} end
+    return U.GetIntegratedSettingsMatches(page.settingsScope, L.Hit)
+  end
+  if type(page.nativeCategories) ~= "table" then return nil end
+  local tabs = {}
+  local all = gs.PageTabs(page)
+  local i, j
+  for i = 1, table.getn(all) do
+    local tab = all[i]
+    local hit = L.Hit(tab.label)
+    local values = tab.nativeCategory and L.nativeIndex[tab.nativeCategory]
+    if not hit and values then
+      for j = 1, table.getn(values) do
+        if L.Hit(values[j]) then
+          hit = true
+          break
+        end
+      end
+    end
+    if hit then table.insert(tabs, tab) end
+  end
+  return tabs
+end
+
+-- The sub-rows gs.RenderList draws: all of them without a query, or when the
+-- category's own name matches; otherwise only those with a hit.
+function L.VisibleTabs(page)
+  if L.FilterValue(L.filter) == "" or L.Hit(L.PageLabel(page)) then
+    return gs.PageTabs(page)
+  end
+  return L.MatchingTabs(page) or gs.PageTabs(page)
+end
+
+-- Whether the open category or sub-row matches by name, in which case every
+-- row of it is shown rather than only the rows that match themselves.
+function L.ScopeHit()
+  local page = gs.active
+  if not page or L.FilterValue(L.filter) == "" then return false end
+  if L.Hit(L.PageLabel(page)) then return true end
+  local tabs = gs.PageTabs(page)
+  local i
+  for i = 1, table.getn(tabs) do
+    if tabs[i].selected and L.Hit(tabs[i].label) then return true end
+  end
+  return false
+end
+
+-- Opens the first sub-row with a hit when the open one has none. Runs once
+-- per query change, so it never fights the player's own clicks.
+function L.RevealHit()
+  local page = gs.active
+  if not page or L.FilterValue(L.filter) == "" then return end
+  if L.Hit(L.PageLabel(page)) then return end
+  local tabs = L.MatchingTabs(page)
+  if not tabs or table.getn(tabs) == 0 then return end
+  local first
+  local i
+  for i = 1, table.getn(tabs) do
+    if tabs[i].selected then return end
+    if not first and not tabs[i].settingsHeader and not tabs[i].unavailable then
+      first = tabs[i]
+    end
+  end
+  if first and type(gs.ClickTab) == "function" then
+    gs.ClickTab(first.name, true)
+  end
 end
 
 function L.FirstMatchingPage(query)
@@ -866,7 +1111,15 @@ function L.SearchTick()
   if not gs.panel or not gs.Read(gs.panel, "IsShown") then return end
   if not L.search then return end
   local text = L.FilterValue(U.SearchBoxText(L.search))
-  if text ~= (L.filter or "") then L.SetFilter(text) end
+  if text ~= (L.filter or "") then
+    L.SetFilter(text)
+  elseif text ~= "" and gs.nativeShown and not L.sweepDone and not L.sweeping then
+    -- A query typed before any client page was opened: index the client's
+    -- options as soon as one has been, then list their hits.
+    L.SweepNative()
+    L.RevealHit()
+    if type(gs.RenderList) == "function" then gs.RenderList() end
+  end
   L.SyncBindingFilter()
 end
 
@@ -1202,22 +1455,22 @@ end
 -- and is moved only through its own SetValue; L.CommitSlider then applies the
 -- setting through the slider's own handler.
 --
--- The drag is U.CreateSlider's (core/widgets.lua), the thumb recipe proven on
--- this client, not a cursor poll. A first version polled GetCursorPosition
--- from OnMouseDown and re-anchored its thumb every tick; /pui gamefocus'
+-- The drag is core/widgets.lua's U.AttachThumbDrag, shared with
+-- U.CreateSlider and the colour picker. A first version polled
+-- GetCursorPosition from OnMouseDown and re-anchored its thumb every tick; /pui gamefocus'
 -- successor trace (PandaUIDiagDB.gameSettingsSlider, 2026-09-22) read the
 -- cursor moving 6 units in 186 ticks while the player dragged across the bar,
 -- and the thumb shook between two values. The recipe that works:
 --
---   * the INPUT is an invisible Button registered for drag, and OnDragStart
---     puts it in native StartMoving (StartMoving / StopMovingOrSizing /
---     StartMoving, as core/mover.lua does) -- the cursor is read only while
---     that native move runs;
+--   * the INPUT is an invisible Button, and the press (not OnDragStart,
+--     which waits for the drag threshold) puts it in native StartMoving
+--     (StartMoving / StopMovingOrSizing / StartMoving, as core/mover.lua
+--     does) -- the cursor is read only while that native move runs;
 --   * the drawn knob is a separate mouse-transparent frame, placed from the
 --     cursor during the drag and from the value otherwise;
 --   * nothing re-anchors the input Button while it is being moved
 --     (knowledge.json / widgets.thumb_reposition_during_drag_breaks_drag);
---   * OnDragStop publishes the value and puts the input back on the knob.
+--   * the release publishes the value and puts the input back on the knob.
 --
 -- A click on the track sets the value there, as U.CreateSlider's does.
 -- ---------------------------------------------------------------------------
@@ -1400,45 +1653,13 @@ function L.SliderInput(row, name, level)
       end
     end
 
-    local updateId = "gamesettings.slider." .. tostring(row)
-
-    local function FinishDrag()
-      if not input.dragging then return end
-      input.dragging = false
-      U.UnregisterUpdate(updateId)
-      pcall(thumb.StopMovingOrSizing, thumb)
-      local slider = Slider()
-      if slider then
-        Apply(slider, L.SliderValueAt(row, slider, input.dragGrab))
-        L.CommitSlider(slider, input.pressValue)
-      end
-      input.pressValue = nil
-      input.dragGrab = nil
-      L.SaveDragTrace()
-      L.PaintThumb(row.puiSliderName)
-    end
-
-    -- IsMouseButtonDown does not exist on this client (the drag trace read
-    -- nil), so this only ends a drag where it does; OnDragStop is the path.
-    local function StillDown()
-      local down = U.G("IsMouseButtonDown")
-      if type(down) ~= "function" then return true end
-      local ok, held = pcall(down, "LeftButton")
-      if not ok then return true end
-      return held and true or false
-    end
-
+    -- The knob follows the cursor; the input handle is left alone.
     local function Follow()
-      if not StillDown() then
-        FinishDrag()
-        return
-      end
       local slider = Slider()
       if not slider then return end
       local before = gs.Number(slider, "GetValue")
       local value, offset = L.SliderValueAt(row, slider, input.dragGrab)
       if not value then return end
-      -- The knob follows the cursor; the input handle is left alone.
       pcall(knob.ClearAllPoints, knob)
       pcall(knob.SetPoint, knob, "LEFT", row, "CENTER", L.Col().sliderX + offset,
             list.sliderY)
@@ -1446,37 +1667,31 @@ function L.SliderInput(row, name, level)
       L.TraceDrag(row, slider, before, value)
     end
 
-    -- The press, not the drag start, fixes the held point: OnDragStart only
-    -- fires once the cursor has already travelled the drag threshold.
-    -- GetCursorPosition in OnMouseDown is the colour picker's verified read
-    -- (api.getcursorposition_usable_for_hit_testing).
-    thumb:SetScript("OnMouseDown", function()
-      local slider = Slider()
-      input.grab = slider and L.SliderGrab(row, slider) or nil
-      input.pressValue = slider and gs.Number(slider, "GetValue") or nil
-    end)
-
-    thumb:SetScript("OnDragStart", function()
-      local slider = Slider()
-      if not slider then return end
-      -- Consumed here so a later release cannot read a stale press; without a
-      -- press read, the held point is taken now, clamped onto the knob.
-      input.dragGrab = input.grab or L.SliderGrab(row, slider)
-      input.grab = nil
-      if input.pressValue == nil then
+    -- The shared mechanism (core/widgets.lua U.AttachThumbDrag): the press
+    -- fixes the held point and starts the follow at once.
+    input.drag = U.AttachThumbDrag(thumb, {
+      ticker = "gamesettings.slider." .. tostring(row),
+      onPress = function()
+        local slider = Slider()
+        if not slider then return false end
+        input.dragGrab = L.SliderGrab(row, slider)
         input.pressValue = gs.Number(slider, "GetValue")
-      end
-      if not pcall(thumb.SetMovable, thumb, true) then return end
-      if pcall(thumb.StartMoving, thumb) then
-        pcall(thumb.StopMovingOrSizing, thumb)
-      end
-      if not pcall(thumb.StartMoving, thumb) then return end
-      input.dragging = true
-      U.RegisterUpdate(updateId, 0, Follow)
-      Follow()
-    end)
-    thumb:SetScript("OnDragStop", FinishDrag)
-    thumb:SetScript("OnHide", FinishDrag)
+        input.dragging = true
+      end,
+      onMove = Follow,
+      onRelease = function()
+        input.dragging = false
+        local slider = Slider()
+        if slider then
+          Apply(slider, L.SliderValueAt(row, slider, input.dragGrab))
+          L.CommitSlider(slider, input.pressValue)
+        end
+        input.pressValue = nil
+        input.dragGrab = nil
+        L.SaveDragTrace()
+        L.PaintThumb(row.puiSliderName)
+      end,
+    })
 
     track:SetScript("OnMouseDown", function()
       local slider = Slider()
@@ -2866,14 +3081,13 @@ function L.ControlRight(control)
   local list = M.foreverWow.list
   local token = M.foreverWow.control
   if control.kind == "slider" then
-    local text = L.values[control.name]
-    local measured = 0
-    if text then
-      local ok, value = pcall(text.GetStringWidth, text)
-      measured = (ok and tonumber(value)) or 0
-    end
-    if measured <= 0 then measured = list.valueWidth or 0 end
-    return list.sliderX + list.sliderWidth + list.valueGap + measured
+    -- A fixed value width, not the live text's: the value FontStrings are
+    -- shared by the reused sliders of every category and still hold the last
+    -- one's text when the column is measured, which slid the whole column
+    -- 36-44 units between category switches (knowledge.json /
+    -- layout.gamesettings_native_list_row_order_unstable).
+    return list.sliderX + list.sliderWidth + list.valueGap +
+           (list.valueWidth or 0)
   elseif control.kind == "dropdown" then
     local x, width = L.DropdownSpan()
     local _, rightPad = gs.DropdownStepperPads()
@@ -2947,10 +3161,123 @@ function L.MeasureColumn(model, rowWidth)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- Row order on the consolidated native pages
+--
+-- uiscalerows.v1 (knowledge.json / layout.gamesettings_native_list_row_order_
+-- unstable) measured why the Video, Sound and Interface rows came back in a
+-- new order after every category switch: each client option sits in its own
+-- named wrapper, so every section holds one control and the sections kept
+-- GetChildren order, which changes between switches. The client's own top
+-- cannot be read at discovery either -- it is nil right after L.Detach.
+--
+-- So the order is measured from the wrappers (which this list never moves)
+-- one tick after the page is laid out, when their rects are resolved, and
+-- kept per category for the session as a rank per row label. Until a
+-- category has been measured, discovery order is used and the deferred pass
+-- relayouts once.
+-- ---------------------------------------------------------------------------
+L.order = {}       -- [page id .. ":" .. category] = { [section key] = rank }
+L.orderTries = {}  -- the same key -> deferred attempts so far
+L.ORDER_TRIES = 10
+
+function L.OrderKey(page)
+  return tostring(page.id) .. ":" .. tostring(page.nativeSelected or "")
+end
+
+function L.SectionKey(section)
+  local control = section and section.controls and section.controls[1]
+  if not control then return nil end
+  return tostring(control.label or control.name) .. "|" .. tostring(control.kind)
+end
+
+-- The model's sections in the measured order, plus the ranks used (nil when
+-- the category has not been measured yet).
+function L.OrderedSections(page, model)
+  local ranks = page.nativeCategories and L.order[L.OrderKey(page)] or nil
+  if not ranks then return model, nil end
+  local list, index = {}, {}
+  local i
+  for i = 1, table.getn(model) do
+    list[i] = model[i]
+    index[model[i]] = i
+  end
+  table.sort(list, function(a, b)
+    local ra, rb = ranks[L.SectionKey(a) or ""], ranks[L.SectionKey(b) or ""]
+    if ra and rb and ra ~= rb then return ra < rb end
+    if ra and not rb then return true end
+    if rb and not ra then return false end
+    return index[a] < index[b]
+  end)
+  return list, ranks
+end
+
+function L.ScheduleOrder(page)
+  U.DeferOnce("gamesettings:listorder", function() L.MeasureOrder(page) end)
+end
+
+function L.MeasureOrder(page)
+  if L.active ~= page then return end
+  local model = L.model[page.id]
+  local key = L.OrderKey(page)
+  if not model or L.order[key] then return end
+
+  local placed, loose = {}, {}
+  local i
+  for i = 1, table.getn(model) do
+    local section = model[i]
+    local control = section.controls[1]
+    local object = control and U.G(control.name)
+    local sectionKey = L.SectionKey(section)
+    if sectionKey and object and L.ControlShown(control, object) then
+      local wrapper = section.name and U.G(section.name)
+      local top = wrapper and gs.Number(wrapper, "GetTop")
+      local left = wrapper and gs.Number(wrapper, "GetLeft")
+      if wrapper and not top then
+        -- Not resolved yet: try again next tick, a bounded number of times.
+        local tries = (L.orderTries[key] or 0) + 1
+        L.orderTries[key] = tries
+        if tries < L.ORDER_TRIES then
+          L.ScheduleOrder(page)
+          return
+        end
+      end
+      if top then
+        table.insert(placed, { key = sectionKey, top = top, left = left or 0,
+                               index = i })
+      else
+        table.insert(loose, sectionKey)
+      end
+    end
+  end
+  if table.getn(placed) + table.getn(loose) == 0 then return end
+
+  -- Top to bottom, then left to right, as the client laid them out.
+  table.sort(placed, function(a, b)
+    if math.abs(a.top - b.top) > 4 then return a.top > b.top end
+    if a.left ~= b.left then return a.left < b.left end
+    return a.index < b.index
+  end)
+  local ranks, rank = {}, 0
+  for i = 1, table.getn(placed) do
+    rank = rank + 1
+    ranks[placed[i].key] = rank
+  end
+  -- Rows with no wrapper rect keep their discovery order after the rest.
+  for i = 1, table.getn(loose) do
+    rank = rank + 1
+    ranks[loose[i]] = rank
+  end
+  L.order[key] = ranks
+  L.orderTries[key] = nil
+  L.Layout(page)
+end
+
 function L.Layout(page)
   local model = L.model[page.id]
   local state = L.saved[page.id]
   if not model or not state or not L.child then return end
+  L.scopeHit = L.ScopeHit()
   local list = M.foreverWow.list
 
   local width = gs.Number(L.scroll, "GetWidth") or 0
@@ -2995,9 +3322,11 @@ function L.Layout(page)
 
   local y = -list.padTop
   local matched = 0
+  local ordered, ranks = L.OrderedSections(page, model)
+  local unranked = false
   local i, j
-  for i = 1, table.getn(model) do
-    local section = model[i]
+  for i = 1, table.getn(ordered) do
+    local section = ordered[i]
     local container = section.container and U.G(section.container)
     local open = not container or gs.Read(container, "IsShown")
     if open then
@@ -3028,6 +3357,11 @@ function L.Layout(page)
       end
 
       if table.getn(visible) > 0 then
+        -- A row the order was measured without (a dependent slider shown
+        -- since): measure the category again.
+        if ranks and not ranks[L.SectionKey(section) or ""] then
+          unranked = true
+        end
         if section.title then
           local header = L.Header(section)
           header:SetWidth(rowWidth)
@@ -3102,6 +3436,11 @@ function L.Layout(page)
     if tab and gs.Read(tab, "IsShown") then pcall(tab.Hide, tab) end
   end
   if type(gs.RenderList) == "function" then gs.RenderList() end
+
+  if page.nativeCategories then
+    if unranked then L.order[L.OrderKey(page)] = nil end
+    if not L.order[L.OrderKey(page)] then L.ScheduleOrder(page) end
+  end
 
   L.UpdateRange(height)
   -- Update the active band's endpoint after UpdateRange has shown or hidden

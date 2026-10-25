@@ -2257,7 +2257,7 @@ local function BuildSettingsPage(parent)
 
   local header = U.CreateSectionHeader(parent, {
     text = U.L("BAGS_TITLE"),
-    width = 484,
+    width = U.SETTINGS_PAGE_WIDTH,
     y = -4,
   })
   table.insert(widgets, header)
@@ -2276,7 +2276,7 @@ local function BuildSettingsPage(parent)
     color = M.color.textDim,
     inherits = "GameFontNormalSmall",
     justify = "LEFT",
-    width = 484,
+    width = U.SETTINGS_PAGE_WIDTH,
   })
   if hint then
     U.AnchorSettingsDescription(hint, enable.box)
@@ -2305,7 +2305,7 @@ local function BuildSettingsPage(parent)
     color = M.color.textDim,
     inherits = "GameFontNormalSmall",
     justify = "LEFT",
-    width = 484,
+    width = U.SETTINGS_PAGE_WIDTH,
   })
   if categoriesHint then
     U.AnchorSettingsDescription(categoriesHint, categories.box)
@@ -2344,7 +2344,7 @@ local function BuildSettingsPage(parent)
     color = M.color.textDim,
     inherits = "GameFontNormalSmall",
     justify = "LEFT",
-    width = 484,
+    width = U.SETTINGS_PAGE_WIDTH,
   })
   if barHint then
     U.AnchorSettingsDescription(barHint, bar.box)

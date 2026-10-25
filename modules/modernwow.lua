@@ -853,7 +853,9 @@ end
 -- (modules/gamesettings.lua, user request 2026-09-22), which already takes its
 -- buttons' 128RedButton face and its MinimalScrollBar from this family. It
 -- adds that one window and no surface, the way mw.MediaAllowed does for the
--- Classic talent window; every other caller keeps the gate.
+-- Classic talent window. Edit mode's windows (core/mover.lua,
+-- core/moverpanel.lua) take the same exception (user request, 2026-10-25);
+-- every other caller keeps the gate.
 function U.ModernWowMetalFrame(frame, width, height, force)
   if not force and not mw.MediaAllowed() then return false end
   if not frame then return false end
@@ -1080,8 +1082,8 @@ mw.units = {
     healthLabelSize = M.fontSize.small - 1,
     -- Name and level 1px smaller (user request, 2026-10-15; was small).
     headerSize = M.fontSize.small - 1,
-    -- Name and level 1px up (user request, 2026-10-15).
-    headerNudgeY = 1,
+    -- Name and level 1px up (user request, 2026-10-15), 0.5 more (2026-10-25).
+    headerNudgeY = 1.5,
     -- Power text 2px under the health row's step (user request, 2026-10-15).
     powerLabelSize = M.fontSize.small - 2,
     -- Health readouts 1 more up (user request, 2026-10-15; was 1).
@@ -1717,7 +1719,17 @@ function mw.ApplyFrameScale(frame, entry)
   local extra = entry and tonumber(entry.scale)
   if extra and extra > 0 then scale = scale * extra end
 
-  pcall(frame.SetScale, frame, scale)
+  -- The pixel scale cancels the whole parent chain, a scaled party anchor
+  -- included, so the edit-mode scale of any ancestor is put back; a frame
+  -- that is itself a scalable mover keeps its own through SetMoverBaseScale.
+  if type(U.MoverAncestorScale) == "function" then
+    scale = scale * U.MoverAncestorScale(frame)
+  end
+  if type(U.SetMoverBaseScale) == "function" then
+    U.SetMoverBaseScale(frame, scale)
+  else
+    pcall(frame.SetScale, frame, scale)
+  end
 end
 
 -- The frame scale that makes one texel cover exactly one screen pixel.
@@ -3429,7 +3441,7 @@ function mw.BuildCastBar(name)
   -- in the bar's own units and simply drawn smaller.
   local scale = mw.CastScale()
   if scale ~= 1 then
-    pcall(widget.SetScale, widget, scale)
+    U.SetMoverBaseScale(widget, scale)
     -- The mover placed this bar at scale 1 during castbar's OnEnable; replay
     -- its point under the new scale or it drifts on every reload.
     U.ReapplyMoverPosition(widget)
@@ -3645,7 +3657,7 @@ function U.ModernWowSetCastScale(value)
   for i = 1, table.getn(mw.castBars) do
     local widget = U.G(mw.castBars[i])
     if widget and widget.puiModernWow then
-      if pcall(widget.SetScale, widget, value) then
+      if U.SetMoverBaseScale(widget, value) then
         U.ReapplyMoverPosition(widget)
         dressed = dressed + 1
       end

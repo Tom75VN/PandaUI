@@ -4,6 +4,34 @@ Player-visible PandaUI changes, newest first. Keep every bullet short, clear and
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-26
+
+### Added
+
+- Edit mode now has a Scale (%) slider for unit frames, raid, minimap, trackers and more.
+- Unit frames can independently show health percentage, value or nothing on each bar side from Game Settings and Edit Mode.
+- General settings now has a Font dropdown to choose the typeface of PandaUI text, with each font name shown in its own font.
+- The status and online-count overlays can be switched off in Edit Mode or on a new Status overlay settings page, which also picks each status readout.
+- A new Minimap settings page can group the chosen minimap icons, including other addons' buttons, behind one gear launcher icon.
+- In edit mode, anchors snap to the screen centre and to other anchors' edges and centres, with a red guide line when aligned, even with Magnet off.
+
+### Changed
+
+- The micro bar's Size (%) slider is now named Scale (%).
+- The modern-wow minimap zone name background is now one text line tall.
+- Edit mode windows and their confirmation popups now use the metal frame, red close button and game settings controls in every theme.
+- The modern-wow player frame name and level sit slightly higher.
+- Game Settings search now finds every Video, Sound and Interface option, key binding and Panda addon option, listing only the pages with a match.
+
+### Fixed
+
+- Fixed the short freeze about once a minute that happened with PandaUI enabled.
+- Unit frames now draw above the action bars where they overlap.
+- In edit mode, cast bar anchors no longer cover the edit and anchor settings panels.
+- The settings window keeps its size at any UI scale, and Panda UI pages now use the game's own settings text size.
+- All sliders, including Game Settings and the colour picker, now follow the mouse as soon as you press them.
+- Video, Sound and Interface settings keep the same row order and alignment when you switch pages.
+
 ## [0.11.2] - 2026-10-25
 
 ### Added

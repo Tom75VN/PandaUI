@@ -48,8 +48,13 @@ local OpenStandaloneSettings
 -- The unified Game Settings window uses the same registered pages rather than
 -- maintaining a second settings schema. It supplies the outer category list;
 -- this state owns only the scrollable page canvas inside that window.
+-- Sibling addons' pages keep the width they were authored for and are scaled
+-- to fit the page box; Panda UI's own pages are laid out to fit it at full
+-- size (U.SETTINGS_PAGE_WIDTH, core/widgets.lua). See IntegratedWidthFor.
+local LEGACY_PAGE_WIDTH = PANEL_WIDTH - SIDEBAR_WIDTH - 24
+
 local integrated = {
-  width = PANEL_WIDTH - SIDEBAR_WIDTH - 24,
+  width = LEGACY_PAGE_WIDTH,
   height = PANEL_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT,
   offset = 0,
   -- Every PandaUI and Unreal Quest page sits this far left of the host box,
@@ -1118,9 +1123,12 @@ local function LayoutIntegratedCanvas()
     pcall(integrated.holder.SetHeight, integrated.holder, height)
   end
 
-  local barWidth = 18
-  local viewportWidth = math.max(1, width - barWidth - 4)
+  -- The view is the scroll frame: the box less the bar's 22-unit column,
+  -- widened by the leftward shift.
+  local viewportWidth = math.max(1, width - 22 - (integrated.shiftX or 0))
   local contentWidth = integrated.width + (integrated.leftPad or 0)
+  pcall(integrated.sheet.SetWidth, integrated.sheet, contentWidth)
+  pcall(integrated.canvas.SetWidth, integrated.canvas, integrated.width)
   local scale = math.min(1, viewportWidth / contentWidth)
   integrated.scale = scale
   pcall(integrated.sheet.SetScale, integrated.sheet, scale)
@@ -1239,9 +1247,20 @@ local function BuildIntegratedCanvas(parent)
   end)
 end
 
+-- Panda UI's pages draw unscaled at U.SETTINGS_PAGE_WIDTH; a sibling addon's
+-- page keeps the legacy width and the fit scale that comes with it.
+local function IntegratedWidthFor(entry)
+  if U.SettingsEntryScope(entry) == "pandaui" and
+     tonumber(U.SETTINGS_PAGE_WIDTH) then
+    return U.SETTINGS_PAGE_WIDTH
+  end
+  return LEGACY_PAGE_WIDTH
+end
+
 function U.SelectIntegratedSettingsPage(id, scope)
   local entry = IntegratedEntry(id, scope) or IntegratedDefault(scope)
   if not entry or not integrated.canvas then return false end
+  integrated.width = IntegratedWidthFor(entry)
 
   if entry.parent then
     local parent = FindEntry(entry.parent)
@@ -1263,6 +1282,10 @@ function U.SelectIntegratedSettingsPage(id, scope)
   end
   SetListShown(entry.widgets, true)
   if type(entry.refresh) == "function" then entry.refresh() end
+  -- Its refresh may have rewritten labels; the next query reads them again.
+  if type(U.ForgetIntegratedSettingsText) == "function" then
+    U.ForgetIntegratedSettingsText(entry.id)
+  end
   activePage = entry
   focusedId = entry.id
   if U.gameSettings then U.gameSettings.revealSettingsSelection = true end
@@ -1311,6 +1334,200 @@ function U.HideIntegratedSettings()
 end
 
 -- ---------------------------------------------------------------------------
+-- Search index for the Game Settings window (modules/gamesettingslist.lua)
+--
+-- A page's controls exist only once it has been built, so the first query
+-- builds every page not built yet -- hidden, into the same canvas and at the
+-- width it is normally built at -- and reads the text its widgets show. This
+-- covers PandaUI's own pages and every sibling addon that registered pages,
+-- since all of them are entries here.
+-- ---------------------------------------------------------------------------
+local search = { text = {}, depth = 3, limit = 400 }
+
+-- Colour codes are not part of what the player reads or types.
+function search.Plain(text)
+  if type(text) ~= "string" then return nil end
+  text = string.gsub(text, "|c%x%x%x%x%x%x%x%x", "")
+  text = string.gsub(text, "|r", "")
+  if text == "" then return nil end
+  return text
+end
+
+function search.Add(values, text)
+  text = search.Plain(text)
+  if text and table.getn(values) < search.limit then table.insert(values, text) end
+end
+
+function search.Read(object, method)
+  if type(object) ~= "table" or type(object[method]) ~= "function" then return nil end
+  local ok, value = pcall(object[method], object)
+  if ok then return value end
+  return nil
+end
+
+-- The text one widget shows: a FontString's or a button's own text, a
+-- composite's parts (core/widgets.lua puiParts) and a frame's own FontStrings
+-- and children, a few levels down. Read-only; nothing is moved or hidden.
+function search.Collect(values, object, depth)
+  if type(object) ~= "table" or depth > search.depth then return end
+  if object.puiParts then
+    local i
+    for i = 1, table.getn(object.puiParts) do
+      search.Collect(values, object.puiParts[i], depth + 1)
+    end
+    return
+  end
+  local kind = search.Read(object, "GetObjectType")
+  if kind == "FontString" or kind == "Button" or kind == "CheckButton" then
+    search.Add(values, search.Read(object, "GetText"))
+  end
+  if type(object.label) == "table" and object.label ~= object then
+    search.Add(values, search.Read(object.label, "GetText"))
+  end
+  if kind == "Frame" or kind == "Button" or kind == "CheckButton" then
+    if type(object.GetRegions) == "function" then
+      local ok, regions = pcall(function() return { object:GetRegions() } end)
+      local i
+      if ok and regions then
+        for i = 1, table.getn(regions) do
+          if search.Read(regions[i], "GetObjectType") == "FontString" then
+            search.Add(values, search.Read(regions[i], "GetText"))
+          end
+        end
+      end
+    end
+    if type(object.GetChildren) == "function" then
+      local ok, kids = pcall(function() return { object:GetChildren() } end)
+      local i
+      if ok and kids then
+        for i = 1, table.getn(kids) do search.Collect(values, kids[i], depth + 1) end
+      end
+    end
+  end
+end
+
+-- Builds one page the way SelectIntegratedSettingsPage does, then hides it.
+-- A page whose build fails is not retried here; selecting it later runs its
+-- build again exactly as before this index existed.
+function search.Build(entry)
+  if entry.widgets or entry.searchFailed or not integrated.canvas then return end
+  local width = integrated.width
+  integrated.width = IntegratedWidthFor(entry)
+  pcall(integrated.canvas.SetWidth, integrated.canvas, integrated.width)
+  local ok, widgets, refresh = pcall(entry.build, integrated.canvas)
+  integrated.width = width
+  pcall(integrated.canvas.SetWidth, integrated.canvas, width)
+  if not ok then
+    entry.searchFailed = true
+    return
+  end
+  entry.widgets = widgets or {}
+  entry.refresh = refresh
+  if entry ~= activePage then SetListShown(entry.widgets, false) end
+end
+
+-- Builds every page not built yet. parent is the window's page box, needed
+-- only when the canvas does not exist; a canvas made here is hidden again,
+-- as U.ShowIntegratedSettings expects to find it.
+function U.IndexIntegratedSettings(parent)
+  local made = false
+  if not integrated.canvas then
+    if not parent then return false end
+    BuildIntegratedCanvas(parent)
+    made = true
+  end
+  local i
+  for i = 1, table.getn(entries) do
+    if entries[i].kind == "page" then search.Build(entries[i]) end
+  end
+  if made then U.HideIntegratedSettings() end
+  return true
+end
+
+-- What a query is matched against for one page: its label and the text of
+-- its widgets once it has been built. Cached until the page is shown again.
+function U.GetIntegratedSettingsSearchText(id)
+  local entry = FindEntry(id)
+  if not entry then return {} end
+  local values = search.text[entry.id]
+  if values then return values end
+  values = {}
+  search.Add(values, entry.label)
+  if entry.widgets then
+    local i
+    for i = 1, table.getn(entry.widgets) do
+      search.Collect(values, entry.widgets[i], 1)
+    end
+    search.text[entry.id] = values
+  end
+  return values
+end
+
+function U.ForgetIntegratedSettingsText(id)
+  if id then search.text[id] = nil end
+end
+
+-- Whether contains(text) holds for the page's label or any of its text.
+function search.Matches(entry, contains)
+  local values = U.GetIntegratedSettingsSearchText(entry.id)
+  local i
+  for i = 1, table.getn(values) do
+    if contains(values[i]) then return true end
+  end
+  return false
+end
+
+-- U.GetIntegratedSettingsTabs while a query is active: only the pages with a
+-- hit, whether or not their group is collapsed, under their group heading
+-- (shown open). A group whose own name matches keeps all its pages.
+function search.Tabs(scope, contains)
+  local hit, groups = {}, {}
+  local i
+  for i = 1, table.getn(entries) do
+    local entry = entries[i]
+    if entry.kind == "page" and U.SettingsEntryScope(entry) == scope then
+      local parent = entry.parent and FindEntry(entry.parent)
+      local inGroup = parent and parent.kind == "group" and parent.id ~= scope
+      if search.Matches(entry, contains) or
+         (inGroup and contains(search.Plain(parent.label))) then
+        hit[entry.id] = true
+        if inGroup then groups[parent.id] = true end
+      end
+    end
+  end
+
+  local tabs = {}
+  for i = 1, table.getn(entries) do
+    local entry = entries[i]
+    if entry.kind == "group" and groups[entry.id] then
+      table.insert(tabs, {
+        name = "settings-group:" .. entry.id,
+        label = entry.label,
+        unavailable = true,
+        settingsHeader = true,
+        settingsGroup = entry.id,
+        collapsed = false,
+      })
+    elseif entry.kind == "page" and hit[entry.id] then
+      local parent = entry.parent and FindEntry(entry.parent)
+      table.insert(tabs, {
+        name = entry.id,
+        label = entry.label,
+        selected = activePage == entry,
+        unavailable = false,
+        muted = entry.muted and true or false,
+        settings = true,
+        indent = (parent and parent.id ~= scope) and 7 or 0,
+      })
+    end
+  end
+  return tabs
+end
+U.GetIntegratedSettingsMatches = function(scope, contains)
+  return search.Tabs(scope or "pandaui", contains)
+end
+
+-- ---------------------------------------------------------------------------
 -- Profile page
 --
 -- Named profiles are account-wide and selectable by every character. The
@@ -1319,7 +1536,7 @@ end
 -- ---------------------------------------------------------------------------
 local function BuildProfilePage(parent)
   local widgets = {}
-  local pageWidth = PANEL_WIDTH - SIDEBAR_WIDTH - 36
+  local pageWidth = U.SETTINGS_PAGE_WIDTH
 
   local function AddLabel(text, x, y, color, width)
     local label = U.CreateSettingsLabel(parent, {
@@ -1387,7 +1604,7 @@ local function BuildProfilePage(parent)
   local selectProfile = U.CreateDropdown(parent, {
     name = "PandaUISettingsSelectProfile",
     value = U.GetCurrentProfileName(),
-    width = 470,
+    width = pageWidth,
     height = 24,
     rowHeight = 20,
     items = ProfileItems(false, false),
@@ -1448,7 +1665,7 @@ local function BuildProfilePage(parent)
       end
     end,
   })
-  copyButton:SetPoint("TOPLEFT", parent, "TOPLEFT", 250, -183)
+  copyButton:SetPoint("TOPLEFT", parent, "TOPLEFT", U.SETTINGS_COLUMN_X, -183)
   table.insert(widgets, copyButton)
   AddHint(U.L("PROFILE_COPY_HINT"), copyFrom.button)
 
@@ -1490,7 +1707,7 @@ local function BuildProfilePage(parent)
       end
     end,
   })
-  deleteButton:SetPoint("TOPLEFT", parent, "TOPLEFT", 250, -258)
+  deleteButton:SetPoint("TOPLEFT", parent, "TOPLEFT", U.SETTINGS_COLUMN_X, -258)
   table.insert(widgets, deleteButton)
   AddHint(U.L("PROFILE_DELETE_HINT"), deleteProfile.button)
 
@@ -1519,7 +1736,7 @@ local function BuildProfilePage(parent)
   table.insert(widgets, reset)
 
   local current = AddLabel(U.L("PROFILE_CURRENT", U.GetCurrentProfileName()),
-                           250, -334, M.color.text, 220)
+                           U.SETTINGS_COLUMN_X, -334, M.color.text, 220)
   AddHint(U.L("PROFILE_RESET_HINT"), reset)
 
   local function Refresh()
@@ -1543,7 +1760,7 @@ local function BuildGeneralPage(parent)
 
   local header = U.CreateSectionHeader(parent, {
     text = U.L("SETTINGS_PAGE_GENERAL"),
-    width = PANEL_WIDTH - SIDEBAR_WIDTH - 36,
+    width = U.SETTINGS_PAGE_WIDTH,
     y = -4,
   })
   table.insert(widgets, header)
@@ -1650,6 +1867,60 @@ local function BuildGeneralPage(parent)
       shift = 12
     end
   end
+
+  -- One face for all PandaUI text: the general role and the unit frames'
+  -- role move together. "original" is the client's own font.
+  local fontLabel = U.CreateSettingsLabel(parent, {
+    size = M.fontSize.small,
+    color = M.color.text,
+    inherits = "GameFontNormalSmall",
+    justify = "LEFT",
+  })
+  if fontLabel then
+    fontLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -102 - shift)
+    fontLabel:SetText(U.L("SETTINGS_FONT"))
+    table.insert(widgets, fontLabel)
+  end
+
+  -- Each row previews its own face; fontId pins the row label to it.
+  local fontItems = { { value = "original", text = U.L("SETTINGS_FONT_DEFAULT"),
+                        fontId = "original" } }
+  local fontIndex
+  for fontIndex = 1, table.getn(M.fonts) do
+    local face = M.fonts[fontIndex]
+    if face.selectable ~= false then
+      table.insert(fontItems, { value = face.id, text = face.label,
+                                fontId = face.id })
+    end
+  end
+
+  local font = U.CreateDropdown(parent, {
+    name = "PandaUISettingsFont",
+    value = U.GetFontChoice("default"),
+    width = 220,
+    height = 24,
+    rowHeight = 20,
+    items = fontItems,
+    onChange = function(value)
+      U.SetFontChoice("default", value)
+      U.SetFontChoice("unitframe", value)
+    end,
+  })
+  font.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -119 - shift)
+  table.insert(widgets, font)
+
+  local fontHint = U.CreateSettingsLabel(parent, {
+    size = M.fontSize.small,
+    color = M.color.textDim,
+    inherits = "GameFontNormalSmall",
+    justify = "LEFT",
+  })
+  if fontHint then
+    U.AnchorSettingsDescription(fontHint, font.button)
+    fontHint:SetText(U.L("SETTINGS_FONT_HINT"))
+    table.insert(widgets, fontHint)
+  end
+  shift = shift + 62
 
   local autoAttack = U.CreateCheckbox(parent, {
     name = "PandaUISettingsAutoAttack",
@@ -1868,6 +2139,7 @@ local function BuildGeneralPage(parent)
 
   local function Refresh()
     themes.SetValue(U.GetThemeStyle(), false)
+    font.SetValue(U.GetFontChoice("default"), false)
     autoAttack.SetValue(U.ModuleConfig("autoattack", { enabled = false }).enabled)
     swingBar.SetValue(U.ModuleConfig("swingbar", { enabled = true }).enabled)
     microbar.SetValue(U.ModuleConfig("microbar", { enabled = true }).enabled)
@@ -1898,7 +2170,7 @@ end
 local function BuildClassicModulesPage(parent)
   local widgets = {}
   local controls = {}
-  local pageWidth = PANEL_WIDTH - SIDEBAR_WIDTH - 36
+  local pageWidth = U.SETTINGS_PAGE_WIDTH
   local columnWidth = math.floor(pageWidth / 2)
 
   local header = U.CreateSectionHeader(parent, {

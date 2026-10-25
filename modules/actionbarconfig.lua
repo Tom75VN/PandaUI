@@ -22,10 +22,10 @@ local GROUP = "actionbars"
 -- category and the mover id are two different names for the same bars.
 local MOVER_ID_PREFIX = "actionbar.bar"
 
--- Content geometry. The settings window is 700 wide with a 168 sidebar, so a
--- page has a little under 490 to work with: two slider columns and a gutter.
-local PAGE_WIDTH = 484
-local COLUMN_X = 258
+-- Content geometry: the shared settings page width (core/widgets.lua), two
+-- slider columns and a gutter.
+local PAGE_WIDTH = U.SETTINGS_PAGE_WIDTH
+local COLUMN_X = U.SETTINGS_COLUMN_X
 local SLIDER_WIDTH = 200
 
 local SLIDERS = {

@@ -825,9 +825,9 @@ local function StatusText(frame, token)
 
     local cr, cg, cb = M.Unpack(M.color.text)
     if data.muted then cr, cg, cb = M.Unpack(M.color.textDim) end
-    -- A unit whose health is only known as a percentage has no absolute value
-    -- to print, so the percentage at the other end is the whole readout.
-    if data.healthIsPercent and not data.exactHealthMax then return "" end
+    -- Without exact creature data the client exposes a 0-100 health value.
+    -- Numeric mode intentionally prints that number without a percent sign;
+    -- enabling exact vitals replaces it with the real creature value.
     return Hex(cr, cg, cb) .. Abbreviate(data.exactHealth or data.health)
   end
 
@@ -920,6 +920,89 @@ local frameOrder = {}
 local textCache = {}    -- fontstring -> last applied string
 local dirtyUnits = {}   -- unit token -> health | power | vitals | full
 local unitMouse = {}
+
+-- Independent health readouts for both ends of every PandaUI unit frame. Each
+-- side can be hidden, percentage or value; when only one health side is used,
+-- the frame's identity text takes the other end. The cached module table keeps
+-- this out of the per-health-event validation path.
+UF.healthText = {
+  defaults = {
+    healthTextLeft = "hidden",
+    healthTextRight = "percent",
+    healthTextVersion = 0,
+  },
+  cfg = nil,
+}
+
+function UF.healthText.Config()
+  if UF.healthText.cfg then return UF.healthText.cfg end
+  local cfg = U.ModuleConfig("unitframes", UF.healthText.defaults)
+
+  -- Migrate the first health-text UI, which stored one enable/mode/side
+  -- selection. It was never released, but a player may have reloaded between
+  -- the two revisions. The independent side values are the durable format.
+  if tonumber(cfg.healthTextVersion) < 1 then
+    if cfg.enabled == false then
+      cfg.healthTextLeft, cfg.healthTextRight = "hidden", "hidden"
+    elseif cfg.enabled ~= nil or cfg.mode ~= nil or cfg.side ~= nil then
+      local value = cfg.mode == "number" and "number" or "percent"
+      if cfg.side == "left" then
+        cfg.healthTextLeft, cfg.healthTextRight = value, "hidden"
+      else
+        cfg.healthTextLeft, cfg.healthTextRight = "hidden", value
+      end
+    end
+    cfg.enabled, cfg.mode, cfg.side = nil, nil, nil
+    cfg.healthTextVersion = 1
+  end
+
+  if cfg.healthTextLeft ~= "percent" and
+     cfg.healthTextLeft ~= "number" then
+    cfg.healthTextLeft = "hidden"
+  end
+  if cfg.healthTextRight ~= "percent" and
+     cfg.healthTextRight ~= "number" then
+    cfg.healthTextRight = "hidden"
+  end
+  if U.db then UF.healthText.cfg = cfg end
+  return cfg
+end
+
+function UF.healthText.IsHealthToken(token)
+  return token == "healthdyn" or token == "healthpct" or
+         token == "healthval"
+end
+
+-- Returns the effective left and right tokens without allocating a table on
+-- every health update. A layout's non-health token (name or level) is retained
+-- on the side opposite the selected readout.
+function UF.healthText.Token(value)
+  if value == "percent" then return "healthpct" end
+  if value == "number" then return "healthval" end
+  return nil
+end
+
+function UF.healthText.Labels(labels)
+  local cfg = UF.healthText.Config()
+  local left = labels and labels.left or nil
+  local right = labels and labels.right or nil
+  local identity
+
+  if not UF.healthText.IsHealthToken(left) then identity = left end
+  if not identity and not UF.healthText.IsHealthToken(right) then identity = right end
+  local leftHealth = UF.healthText.Token(cfg.healthTextLeft)
+  local rightHealth = UF.healthText.Token(cfg.healthTextRight)
+
+  if leftHealth and rightHealth then return leftHealth, rightHealth end
+  if leftHealth then return leftHealth, identity end
+  if rightHealth then return identity, rightHealth end
+
+  -- With both health sides hidden, retain the frame's authored identity text
+  -- (name or level) in its original slot.
+  if UF.healthText.IsHealthToken(left) then left = nil end
+  if UF.healthText.IsHealthToken(right) then right = nil end
+  return left, right
+end
 
 -- Classic keeps PandaUI's generated frames as invisible layout anchors while
 -- showing the client's real unit frames on top of them. That gives the theme
@@ -3080,6 +3163,14 @@ local function BuildFrame(spec, parent)
   -- keep them below native windows such as the help and GM-assistance panels;
   -- SetFrameStrata also carries this layer to the frame's bar children.
   frame:SetFrameStrata("LOW")
+  -- Same strata as the action bars (also LOW), so the level decides: raise the
+  -- frame before any child is created (a child takes parent level + 1) so the
+  -- whole unit frame draws over a bar it overlaps. 30 clears the bar buttons'
+  -- raised text layers and stays under the LOW level 99/100 tooltip and bags.
+  local baseOk, baseLevel = pcall(frame.GetFrameLevel, frame)
+  if not baseOk or not tonumber(baseLevel) or baseLevel < 30 then
+    pcall(frame.SetFrameLevel, frame, 30)
+  end
 
   -- The portrait sits to the left of the bar stack on its own square, sized to
   -- match the stack's full height, and widens the frame by that square less the
@@ -4124,13 +4215,16 @@ local function TokenNeedsRefresh(token, mode)
   return false
 end
 
-local function ApplyBarLabels(frame, box, labels, mode)
+local function ApplyBarLabels(frame, box, labels, mode, isHealth)
   if not box or not labels then return end
-  if box.leftLabel and TokenNeedsRefresh(labels.left, mode) then
-    SetLabelText(box.leftLabel, StatusText(frame, labels.left))
+  local left, right = labels.left, labels.right
+  if isHealth then left, right = UF.healthText.Labels(labels) end
+
+  if box.leftLabel and TokenNeedsRefresh(left, mode) then
+    SetLabelText(box.leftLabel, StatusText(frame, left))
   end
-  if box.rightLabel and TokenNeedsRefresh(labels.right, mode) then
-    if box.rightNameLabel and labels.right == "unitrev" then
+  if box.rightLabel and TokenNeedsRefresh(right, mode) then
+    if box.rightNameLabel and right == "unitrev" then
       local name, truncated = ColoredName(frame.data,
                                           frame.spec.nameClassColor,
                                           frame.spec.targetReactionName)
@@ -4139,7 +4233,8 @@ local function ApplyBarLabels(frame, box, labels, mode)
       box.rightNameLabel:SetPoint("RIGHT", box.rightLabel, "LEFT",
         -(truncated and NAME_LEVEL_GAP_TRUNCATED or NAME_LEVEL_GAP), 0)
     else
-      SetLabelText(box.rightLabel, StatusText(frame, labels.right))
+      SetLabelText(box.rightLabel, StatusText(frame, right))
+      if box.rightNameLabel then SetLabelText(box.rightNameLabel, "") end
     end
   end
 end
@@ -4157,7 +4252,7 @@ local function ApplyTexts(frame, mode)
   if frame.health.label and TokenNeedsRefresh(frame.spec.healthText, mode) then
     SetLabelText(frame.health.label, StatusText(frame, frame.spec.healthText))
   end
-  ApplyBarLabels(frame, frame.health, frame.spec.healthLabels, mode)
+  ApplyBarLabels(frame, frame.health, frame.spec.healthLabels, mode, true)
   ApplyBarLabels(frame, frame.power, frame.spec.powerLabels, mode)
 
   local tokens = frame.spec.values or {}
@@ -4659,6 +4754,32 @@ local function RefreshAll()
   for i = 1, table.getn(frameOrder) do
     RefreshFrame(frames[frameOrder[i]], "full")
   end
+end
+
+-- Shared by the integrated Unit Frames page and every contextual unit-frame
+-- mover panel. Keys are deliberately narrow so no caller can write arbitrary
+-- values into the module store.
+function U.GetUnitFrameHealthTextSetting(key)
+  local cfg = UF.healthText.Config()
+  if key == "left" then return cfg.healthTextLeft end
+  if key == "right" then return cfg.healthTextRight end
+  return nil
+end
+
+function U.SetUnitFrameHealthTextSetting(key, value)
+  local cfg = UF.healthText.Config()
+  local store
+  if key == "left" then store = "healthTextLeft"
+  elseif key == "right" then store = "healthTextRight"
+  else return false end
+  if value ~= "percent" and value ~= "number" then value = "hidden" end
+  if cfg[store] == value then return true end
+  cfg[store] = value
+  RefreshAll()
+  if type(U.RefreshUnitFrameSettingsViews) == "function" then
+    U.RefreshUnitFrameSettingsViews()
+  end
+  return true
 end
 
 -- ---------------------------------------------------------------------------
@@ -5366,6 +5487,7 @@ local function BuildPartyAnchor()
   U.RegisterMover("unitframes.party", anchor, {
     label = U.L("MOVER_LABEL_PARTY"),
     default = { point = "TOPLEFT", relativePoint = "TOPLEFT", x = 5, y = -5 },
+    scalable = true,
   })
 
   -- No unit of its own, so nothing ever hides it: the members handle their own
@@ -5610,7 +5732,6 @@ end
 -- Each page starts at the top of its own content frame, so nothing here has to
 -- know what any other page is doing.
 local SETTINGS_GROUP = "unitframes"
-local PAGE_WIDTH = 484
 
 -- The unit movers registered in OnEnable that carry a contextual settings
 -- panel (modules/unitframeconfig.lua). Only the panel that is actually open
@@ -5634,6 +5755,7 @@ function U.RefreshUnitFrameSettingsViews()
     U.RefreshMoverPanel(PLAYER_MOVER_ID)
     U.RefreshMoverPanel(TARGET_MOVER_ID)
     U.RefreshMoverPanel(TARGET_TARGET_MOVER_ID)
+    U.RefreshMoverPanel("unitframes.pet")
     U.RefreshMoverPanel(PARTY_MOVER_ID)
   end
   if type(U.RefreshSettingsPage) == "function" then
@@ -5663,7 +5785,7 @@ local function BuildUnitFrameStyleSettings(parent, y, width)
 
   local header = U.CreateSectionHeader(parent, {
     text = U.L("UF_STYLE_HEADER"),
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
     y = y,
   })
   table.insert(widgets, header)
@@ -5713,7 +5835,7 @@ local function BuildUnitFrameStyleSettings(parent, y, width)
     color = M.color.textDim,
     inherits = "GameFontNormalSmall",
     justify = "LEFT",
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
   })
   if hint then
     U.AnchorSettingsDescription(hint, selector.button)
@@ -5734,7 +5856,7 @@ local function BuildUnitFramePartySettings(parent, y, width)
 
   local header = U.CreateSectionHeader(parent, {
     text = U.L("UF_PARTY_HEADER"),
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
     y = y,
   })
   table.insert(widgets, header)
@@ -5869,17 +5991,91 @@ end
 -- glyphs inside one and breaks the gap -- so the reserve carries three wrapped
 -- lines, which is more than the longest translation needs.
 local EXACT_VITALS_SECTION_HEIGHT = 96
+UF.healthTextSectionHeight = 78
 
 local function BuildUnitFrameGeneralSettings(parent, y, width)
   y = y or -4
   local widgets = {}
+
+  local healthHeader = U.CreateSectionHeader(parent, {
+    text = U.L("UF_HEALTH_TEXT_HEADER"),
+    width = width or U.SETTINGS_PAGE_WIDTH,
+    y = y,
+  })
+  table.insert(widgets, healthHeader)
+
+  local leftLabel = U.CreateSettingsLabel(parent, {
+    size = M.fontSize.small,
+    color = M.color.accent,
+    inherits = "GameFontNormalSmall",
+    justify = "LEFT",
+    width = U.SETTINGS_COLUMN_WIDTH,
+  })
+  if leftLabel then
+    leftLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y - 26)
+    leftLabel:SetText(U.L("UF_HEALTH_TEXT_LEFT"))
+    table.insert(widgets, leftLabel)
+  end
+
+  local sideLabel = U.CreateSettingsLabel(parent, {
+    size = M.fontSize.small,
+    color = M.color.accent,
+    inherits = "GameFontNormalSmall",
+    justify = "LEFT",
+    width = U.SETTINGS_COLUMN_WIDTH,
+  })
+  if sideLabel then
+    sideLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", U.SETTINGS_COLUMN_X,
+                       y - 26)
+    sideLabel:SetText(U.L("UF_HEALTH_TEXT_RIGHT"))
+    table.insert(widgets, sideLabel)
+  end
+
+  local healthLeft = U.CreateDropdown(parent, {
+    name = "PandaUISettingsHealthTextLeft",
+    width = U.SETTINGS_COLUMN_WIDTH,
+    height = 24,
+    rowHeight = 20,
+    value = U.GetUnitFrameHealthTextSetting("left"),
+    items = {
+      { value = "hidden", text = U.L("UF_HEALTH_TEXT_HIDDEN") },
+      { value = "percent", text = U.L("UF_HEALTH_TEXT_PERCENT") },
+      { value = "number", text = U.L("UF_HEALTH_TEXT_VALUE") },
+    },
+    onChange = function(value)
+      U.SetUnitFrameHealthTextSetting("left", value)
+    end,
+  })
+  healthLeft.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y - 42)
+  table.insert(widgets, healthLeft)
+
+  local healthRight = U.CreateDropdown(parent, {
+    name = "PandaUISettingsHealthTextRight",
+    width = U.SETTINGS_COLUMN_WIDTH,
+    height = 24,
+    rowHeight = 20,
+    value = U.GetUnitFrameHealthTextSetting("right"),
+    items = {
+      { value = "hidden", text = U.L("UF_HEALTH_TEXT_HIDDEN") },
+      { value = "percent", text = U.L("UF_HEALTH_TEXT_PERCENT") },
+      { value = "number", text = U.L("UF_HEALTH_TEXT_VALUE") },
+    },
+    onChange = function(value)
+      U.SetUnitFrameHealthTextSetting("right", value)
+    end,
+  })
+  healthRight.SetPoint("TOPLEFT", parent, "TOPLEFT", U.SETTINGS_COLUMN_X,
+                       y - 42)
+  table.insert(widgets, healthRight)
+
+  y = y - UF.healthTextSectionHeight
 
   -- Portraits: one independent switch for each mover-owned frame family. Pet
   -- follows player and party pets follow party; target and target-of-target
   -- are independent, matching model3d.Family above.
   local portraitHeader = U.CreateSectionHeader(parent, {
     text = U.L("UF_PORTRAIT_HEADER"),
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
     y = y,
   })
   table.insert(widgets, portraitHeader)
@@ -5901,7 +6097,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
       local control = U.CreateCheckbox(parent, {
         name = "PandaUISettingsPortrait" .. entry[1],
         text = U.L(entry[2]),
-        textWidth = 214,
+        textWidth = U.SETTINGS_COLUMN_WIDTH - 26,
         value = U.GetPortraitEnabled(family),
         onChange = function(value)
           U.SetPortraitEnabled(family, value)
@@ -5921,39 +6117,39 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   local portrait3dPlayer = U.CreateCheckbox(parent, {
     name = "PandaUISettingsPortrait3DPlayer",
     text = U.L("UF_PORTRAIT_3D_PLAYER"),
-    textWidth = 214,
+    textWidth = U.SETTINGS_COLUMN_WIDTH - 26,
     value = U.GetPortrait3D("player"),
     onChange = function(value)
       U.SetPortrait3D("player", value)
     end,
   })
   portrait3dPlayer.SetPoint("TOPLEFT", parent, "TOPLEFT",
-                            modernPortraits and 240 or 0, y - 26)
+                            modernPortraits and U.SETTINGS_COLUMN_X or 0, y - 26)
   table.insert(widgets, portrait3dPlayer)
 
   local portrait3dTarget = U.CreateCheckbox(parent, {
     name = "PandaUISettingsPortrait3DTarget",
     text = U.L("UF_PORTRAIT_3D_TARGET"),
-    textWidth = 214,
+    textWidth = U.SETTINGS_COLUMN_WIDTH - 26,
     value = U.GetPortrait3D("target"),
     onChange = function(value)
       U.SetPortrait3D("target", value)
     end,
   })
-  portrait3dTarget.SetPoint("TOPLEFT", parent, "TOPLEFT", 240,
+  portrait3dTarget.SetPoint("TOPLEFT", parent, "TOPLEFT", U.SETTINGS_COLUMN_X,
                             y - (modernPortraits and 50 or 26))
   table.insert(widgets, portrait3dTarget)
 
   local portrait3dTargetTarget = U.CreateCheckbox(parent, {
     name = "PandaUISettingsPortrait3DTargetTarget",
     text = U.L("UF_PORTRAIT_3D_TARGET_TARGET"),
-    textWidth = 214,
+    textWidth = U.SETTINGS_COLUMN_WIDTH - 26,
     value = U.GetPortrait3D("targettarget"),
     onChange = function(value)
       U.SetPortrait3D("targettarget", value)
     end,
   })
-  portrait3dTargetTarget.SetPoint("TOPLEFT", parent, "TOPLEFT", 240,
+  portrait3dTargetTarget.SetPoint("TOPLEFT", parent, "TOPLEFT", U.SETTINGS_COLUMN_X,
                                   y - (modernPortraits and 74 or 50))
   table.insert(widgets, portrait3dTargetTarget)
 
@@ -5966,7 +6162,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
     end,
   })
   portrait3dParty.SetPoint("TOPLEFT", parent, "TOPLEFT",
-                           modernPortraits and 240 or 0,
+                           modernPortraits and U.SETTINGS_COLUMN_X or 0,
                            y - (modernPortraits and 98 or 50))
   table.insert(widgets, portrait3dParty)
 
@@ -5975,7 +6171,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
     color = M.color.textDim,
     inherits = "GameFontNormalSmall",
     justify = "LEFT",
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
   })
   if portraitHint then
     U.AnchorSettingsDescription(portraitHint,
@@ -5990,7 +6186,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   -- shows only while the option is on.
   local classIconHeader = U.CreateSectionHeader(parent, {
     text = U.L("UF_CLASS_ICON_HEADER"),
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
     y = y,
   })
   table.insert(widgets, classIconHeader)
@@ -5999,7 +6195,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   local classIcon = U.CreateCheckbox(parent, {
     name = "PandaUISettingsPortraitClassIcon",
     text = U.L("UF_CLASS_ICON"),
-    textWidth = 214,
+    textWidth = U.SETTINGS_COLUMN_WIDTH - 26,
     value = U.GetPortraitClassIcon(),
     onChange = function(value)
       U.SetPortraitClassIcon(value)
@@ -6029,7 +6225,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
       U.SetPortraitClassIcon(nil, value)
     end,
   })
-  classIconStyle.SetPoint("TOPLEFT", parent, "TOPLEFT", 240, y - 26)
+  classIconStyle.SetPoint("TOPLEFT", parent, "TOPLEFT", U.SETTINGS_COLUMN_X, y - 26)
   table.insert(widgets, classIconStyle)
 
   local classIconHint = U.CreateSettingsLabel(parent, {
@@ -6037,7 +6233,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
     color = M.color.textDim,
     inherits = "GameFontNormalSmall",
     justify = "LEFT",
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
   })
   if classIconHint then
     -- 5 below the 24-tall style dropdown's bottom edge (row at y - 26), not
@@ -6052,7 +6248,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
 
   local vitalsHeader = U.CreateSectionHeader(parent, {
     text = U.L("UF_EXACT_VITALS_HEADER"),
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
     y = y,
   })
   table.insert(widgets, vitalsHeader)
@@ -6073,7 +6269,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
     color = M.color.textDim,
     inherits = "GameFontNormalSmall",
     justify = "LEFT",
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
   })
   if vitalsHint then
     U.AnchorSettingsDescription(vitalsHint, exactVitals.box)
@@ -6087,7 +6283,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
 
   local tickHeader = U.CreateSectionHeader(parent, {
     text = U.L("UF_POWER_TICK_HEADER"),
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
     y = y,
   })
   table.insert(widgets, tickHeader)
@@ -6095,7 +6291,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   local manaTick = U.CreateCheckbox(parent, {
     name = "PandaUISettingsManaTick",
     text = U.L("UF_MANA_TICK"),
-    textWidth = 214,
+    textWidth = U.SETTINGS_COLUMN_WIDTH - 26,
     value = U.GetUnitFramePowerTick("manaTick"),
     onChange = function(value)
       U.SetUnitFramePowerTick("manaTick", value)
@@ -6107,18 +6303,18 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   local energyTick = U.CreateCheckbox(parent, {
     name = "PandaUISettingsEnergyTick",
     text = U.L("UF_ENERGY_TICK"),
-    textWidth = 214,
+    textWidth = U.SETTINGS_COLUMN_WIDTH - 26,
     value = U.GetUnitFramePowerTick("energyTick"),
     onChange = function(value)
       U.SetUnitFramePowerTick("energyTick", value)
     end,
   })
-  energyTick.SetPoint("TOPLEFT", parent, "TOPLEFT", 240, y - 26)
+  energyTick.SetPoint("TOPLEFT", parent, "TOPLEFT", U.SETTINGS_COLUMN_X, y - 26)
   table.insert(widgets, energyTick)
 
   local comboHeader = U.CreateSectionHeader(parent, {
     text = U.L("UF_COMBO_POINTS_HEADER"),
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
     y = y - 56,
   })
   -- Section headers are composite controls, so give this one the same
@@ -6162,7 +6358,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   if type(U.BuildHealPredictSettings) == "function" then
     local healWidgets
     healWidgets, refreshHeal = U.BuildHealPredictSettings(parent, y - 122,
-                                                          width or 496)
+                                                          width or U.SETTINGS_PAGE_WIDTH)
     local n
     for n = 1, table.getn(healWidgets) do
       table.insert(widgets, healWidgets[n])
@@ -6170,6 +6366,8 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   end
 
   local function Refresh()
+    healthLeft.SetValue(U.GetUnitFrameHealthTextSetting("left"))
+    healthRight.SetValue(U.GetUnitFrameHealthTextSetting("right"))
     if modernPortraits then
       portraitPlayer.SetValue(U.GetPortraitEnabled("player"))
       portraitTarget.SetValue(U.GetPortraitEnabled("target"))
@@ -6202,15 +6400,15 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
 end
 
 -- width is the page's own section width, so every heading on the page draws its
--- rules to the same edges. It falls back to the historical 496 for a caller
--- that does not pass one.
+-- rules to the same edges. It falls back to U.SETTINGS_PAGE_WIDTH for a
+-- caller that does not pass one.
 local function BuildUnitFrameColorSettings(parent, y, width)
   y = y or -4
   local widgets = {}
 
   local header = U.CreateSectionHeader(parent, {
     text = U.L("UF_COLORS_HEADER"),
-    width = width or 496,
+    width = width or U.SETTINGS_PAGE_WIDTH,
     y = y,
   })
   table.insert(widgets, header)
@@ -6247,7 +6445,7 @@ local function BuildUnitFrameColorSettings(parent, y, width)
   })
   -- Health shares the custom-colour row; it is only meaningful once that
   -- checkbox is enabled and this keeps the combined Unit Frames page compact.
-  healthPicker.SetPoint("TOPLEFT", parent, "TOPLEFT", 260, y - 26)
+  healthPicker.SetPoint("TOPLEFT", parent, "TOPLEFT", U.SETTINGS_COLUMN_X, y - 26)
   table.insert(widgets, healthPicker)
 
   local classHealthToggle = U.CreateCheckbox(parent, {
@@ -6281,7 +6479,7 @@ local function BuildUnitFrameColorSettings(parent, y, width)
   -- as a set of swatches. The label width is set explicitly because the
   -- default fills the whole settings column and neighbouring labels would
   -- overlap.
-  local COLUMN_WIDTH = 118
+  local COLUMN_WIDTH = math.floor(((width or U.SETTINGS_PAGE_WIDTH) - 12) / 4)
   local powerPickers = {}
   local i
   for i = 1, table.getn(POWER_TYPES) do
@@ -6329,7 +6527,7 @@ local function BuildUnitFrameColorSettings(parent, y, width)
       color = M.color.textDim,
       inherits = "GameFontNormalSmall",
       justify = "LEFT",
-      width = width or 496,
+      width = width or U.SETTINGS_PAGE_WIDTH,
     })
     if ringHint then
       U.AnchorSettingsDescription(ringHint, ringToggle.box)
@@ -6369,13 +6567,14 @@ local function BuildGeneralPage(parent)
   -- The rest of the page then keeps the top of the content area rather than
   -- sitting below a gap.
   if not U.UnitFrameStyleSelectable() then
-    return BuildUnitFrameGeneralSettings(parent, -4, PAGE_WIDTH)
+    return BuildUnitFrameGeneralSettings(parent, -4, U.SETTINGS_PAGE_WIDTH)
   end
 
   local widgets, refreshStyle = BuildUnitFrameStyleSettings(parent, -4,
-                                                            PAGE_WIDTH)
+                                                            U.SETTINGS_PAGE_WIDTH)
   local generalWidgets, refreshGeneral =
-    BuildUnitFrameGeneralSettings(parent, -4 - STYLE_SECTION_HEIGHT, PAGE_WIDTH)
+    BuildUnitFrameGeneralSettings(parent, -4 - STYLE_SECTION_HEIGHT,
+                                  U.SETTINGS_PAGE_WIDTH)
   local i
   for i = 1, table.getn(generalWidgets) do
     table.insert(widgets, generalWidgets[i])
@@ -6394,11 +6593,12 @@ end
 -- the party controls and merges the two refreshes.
 local function BuildPartyPage(parent)
   local widgets, refreshParty = BuildUnitFramePartySettings(parent, -4,
-                                                            PAGE_WIDTH)
+                                                            U.SETTINGS_PAGE_WIDTH)
   local refreshHots
   if type(U.BuildHotSettings) == "function" then
     local hotWidgets
-    hotWidgets, refreshHots = U.BuildHotSettings(parent, -88, PAGE_WIDTH)
+    hotWidgets, refreshHots = U.BuildHotSettings(parent, -88,
+                                                 U.SETTINGS_PAGE_WIDTH)
     local i
     for i = 1, table.getn(hotWidgets) do
       table.insert(widgets, hotWidgets[i])
@@ -6414,14 +6614,14 @@ local function BuildPartyPage(parent)
 end
 
 local function BuildColorPage(parent)
-  return BuildUnitFrameColorSettings(parent, -4, PAGE_WIDTH)
+  return BuildUnitFrameColorSettings(parent, -4, U.SETTINGS_PAGE_WIDTH)
 end
 
 -- modules/auras.lua registers its own page into this group with
 -- after = "unitframes.party", which is what puts Auras between Party Frames and
 -- Colors regardless of module load order.
 U.UnitFrameSettingsGroup = SETTINGS_GROUP
-U.UnitFrameSettingsPageWidth = PAGE_WIDTH
+U.UnitFrameSettingsPageWidth = U.SETTINGS_PAGE_WIDTH
 
 function UF:OnInit()
   if type(U.RegisterSettingsGroup) ~= "function" then
@@ -6492,6 +6692,7 @@ function UF:OnEnable()
       U.RegisterMover("unitframes." .. spec.id, frame, {
         label = U.L(spec.labelKey, spec.labelArg),
         default = spec.default,
+        scalable = true,
       })
     end
 

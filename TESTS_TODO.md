@@ -14,10 +14,37 @@ Knowledge records: `perf.pandaui_only_stutter`,
 `api.debugprofilestop_octo_unverified`. Reading the results:
 `.claude/rules/pandaui-diagnostics.md`.
 
-- [ ] S1. Fully relaunch the client once (the probe TOC gained a file; `/reload` is not enough).
-- [ ] S2. pandaUI and PandaRuntimeProbe enabled. Go where it stutters, stand still, out of combat, type `/prp puistutter`. About 2 minutes; pandaUI blinks off and on, which is expected. When chat says "results saved", type `/prp reload`.
-- [ ] S3. At character select, disable pandaUI and keep PandaRuntimeProbe. Same spot, `/prp puistutter` (records the no-pandaUI reference), then `/prp reload`.
-- [ ] S4. Report that both runs are done, plus any Lua error and the chat summary lines (`on ... | luaOff ... | hidden ...` and `noPandaUI ...`).
+- [x] S1-S4. Done 2026-10-25: the stutter is Lua garbage collection (~158 KB/s from pandaUI); tooltip, mover and status updaters fixed.
+- [x] S5. Probe re-run 2026-10-25: 21 KB/s (was 158), no collection or hitch in 120 s. Still owed: confirm the freeze is gone in normal play. Re-run after the fix: `/reload` (or relaunch), pandaUI and PandaRuntimeProbe enabled, same spot, standing still, `/prp puistutter`, then `/prp reload` after "results saved". Report any Lua error, and whether the once-a-minute freeze is gone in normal play.
+
+## Edit mode alignment guides (coded 2026-10-25, v4 confirmed in game 2026-10-26)
+
+Code: `core/mover.lua` (`AlignDelta`, `AlignedLine`, `UpdateAlignmentGuides`).
+Knowledge record: `mover.smart_alignment_guides_unverified`.
+
+v1 failed in game (grid 20): centre X often missed, neighbour centre match drew no line. Retest v2:
+
+- [ ] A1. `/reload`, open edit mode, grid on. Drag the player frame slowly across the screen middle: one step lands exactly on it with a red vertical line; same for the horizontal middle. Repeat with grid size 5 and 50.
+- [ ] A2. Grid on, then grid off. Drag the target frame level with the player frame (top edges, then centres, then bottom edges), far apart: it snaps and a red horizontal line shows each time.
+- [ ] A3. Grid on and off: line a left or right edge or the centre up with another anchor's left, right or centre: red vertical line shows.
+- [ ] A4. Drag slowly through a match: the line appears only when aligned, without flicker, and disappears once past.
+- [ ] A5. Grid on, away from any line: movement still steps on the grid. Report any Lua error.
+- [x] A6. v2 drew centre-to-bottom but never centre-to-centre (swing bar beside cast bar). v3 still no line (2026-10-26).
+- [x] A7. Trace for v3 done 2026-10-26: magnet was off, so alignment never ran (centres 0.25 apart).
+- [x] A8. Confirmed fixed in game 2026-10-26. v4: `/reload`, edit mode, magnet off, grid 10. Drag the swing bar beside the cast bar: centre-to-centre snaps with a red line. Then magnet off: anchors may still overlap; magnet on: they stop at each other.
+
+## Game Settings search (coded 2026-10-25, passed in game 2026-10-25)
+
+Code: `modules/gamesettingslist.lua`, `modules/settings.lua`. Knowledge
+record: `settings.gamesettings_search_only_open_native_leaf`.
+
+- [x] G1. `/reload`. Esc > Options (opens on Video). Type `chat` in the search: Interface lists only its Chat sub-row, and it opens.
+- [x] G2. Clear the search, open Video > Display, then type an option from another leaf (e.g. `combat text`): only matching sub-rows show, the first opens with that option.
+- [x] G3. Type a Panda UI option label (e.g. `font`): Panda UI lists only pages holding it; click each, it opens. Note any hitch on the first letter typed.
+- [x] G4. Type a pandaQuest and a pandaMap option label: their category lists only the matching page. Disable one addon, relaunch: its category never appears.
+- [x] G5. Type `move forward`: Key Bindings is listed and its list shows that binding.
+- [x] G6. `/pui` (opens on Panda UI), type a Video option: does it show? Then click Video once and retype: it must show.
+- [x] G7. Clear the search: every category and sub-row returns, nothing stray drawn on any page, the game menu did not pop up.
 
 ## Nameplates: ShaguPlates options (ported 2026-10-20)
 

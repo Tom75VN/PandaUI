@@ -1449,6 +1449,7 @@ local function BuildPetBar()
       point = "TOPRIGHT", relativePoint = "BOTTOM",
       x = -75, y = 90 + U.BorderSize(),
     },
+    scalable = true,
   })
 end
 
@@ -1488,6 +1489,7 @@ local function BuildTargetBar()
   U.RegisterMover("castbar.target", target.bar, {
     label = U.L("MOVER_LABEL_TARGET_CASTBAR"),
     default = { point = "CENTER", relativePoint = "CENTER", x = 0, y = -250 },
+    scalable = true,
   })
 end
 

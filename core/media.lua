@@ -17,15 +17,14 @@ local M = U.media
 -- ---------------------------------------------------------------------------
 -- Fonts
 --
--- behavior.json / fonts.pfui_path_and_measure.v1 is BROKEN with confidence
--- RUNTIME_FAILURE_CONFIRMED: assigning a bundled TTF directly to an inherited
--- FontString silently kept GameFontNormal. The client documentation records a
--- named-Font/SetFontObject route, but USER_CONFIRMED_INGAME: selecting a
--- bundled face through that route made PandaUI text disappear. Keep the
--- inherited native FontObject as the safe default until a focused probe
--- establishes a working custom-font contract. core/compat.lua owns the
--- guarded experimental adapter used only when a bundled face is selected.
+-- The client's inherited FontObject stays the default ("original"). On Octo,
+-- FontString:SetFont with a bundled AddOns TTF draws that face
+-- (knowledge.json / fonts.enus_client_font_lacks_cyrillic_cjk, probe
+-- fontglyph.v1); core/compat.lua uses that route for a bundled choice, reads
+-- it back and falls back to the original face if the client did not take it.
 -- Only these short ids are persisted; asset paths never enter SavedVariables.
+-- `selectable = false` keeps a face out of the settings dropdown: Invisible
+-- draws no glyphs, so choosing it would blank the very menu that undoes it.
 -- ---------------------------------------------------------------------------
 M.defaultFontId = "original"
 M.defaultUnitFrameFontId = "original"
@@ -36,7 +35,8 @@ M.fonts = {
   { id = "die_die_die",      label = "Die Die Die",      file = "DieDieDie.ttf" },
   { id = "expressway",       label = "Expressway",       file = "Expressway.ttf" },
   { id = "homespun",         label = "Homespun",         file = "Homespun.ttf" },
-  { id = "invisible",        label = "Invisible",        file = "Invisible.ttf" },
+  { id = "invisible",        label = "Invisible",        file = "Invisible.ttf",
+    selectable = false },
   { id = "pt_sans_narrow",   label = "PT Sans Narrow",   file = "PTSansNarrow.ttf" },
 }
 
@@ -971,11 +971,11 @@ M.modernWow.minimap = {
   topPanelHeight = 12,
   topPanelGap = 18,
   topPanelRightOverhang = 5,
-  -- 30, +7.65 so the taller band keeps its centre (it grows 3 px each way).
-  topPanelBottomOverhang = 37.65,
-  -- Drawn art height: the original 32 (12 panel + 20 overhang) plus 30%,
-  -- then +11 drawn for +6 visible px (the band is 35/64 of the art).
-  topPanelArtHeight = 52.6,
+  -- Keeps the band centred on the zone name (the old zoneY = 6 position).
+  topPanelBottomOverhang = 15.42,
+  -- Drawn art height for a 16 px visible band, one line of the 8 px zone
+  -- name (the band is 35/64 of the art).
+  topPanelArtHeight = 29.26,
   -- Visible band of uiminimap_toppanel.tga: alpha rows 2..36 top-down (end
   -- exclusive 37) of 64 -- the file is bottom-origin. Confirmed by the
   -- 2026-09-14 in-game screenshot; the zone name centres on this band.
@@ -988,7 +988,7 @@ M.modernWow.minimap = {
   topPanelVisibleBottom = 37,
   zoneFontSize = M.fontSize.normal - 3,
   zoneX = 4,
-  zoneY = 6,  -- nudge above the band centre (positive = up)
+  zoneY = 0,  -- nudge above the band centre (positive = up)
   zoneHeight = 20,
   -- Warm title gold, as the theme's other short headings.
   zoneColor = { 1.00, 0.82, 0.00, 1.00 },
@@ -4135,6 +4135,19 @@ M.modernWow.metalFrame = {
              u1 = 0, u2 = 384, v1 = 64, v2 = 116 },
   left   = { u1 = 22,  u2 = 82,  v1 = 138, v2 = 228 },
   right  = { u1 = 410, u2 = 470, v1 = 140, v2 = 230 },
+}
+
+-- Edit mode's windows (core/mover.lua edit window and advanced drawer,
+-- core/moverpanel.lua's contextual panels) wear the metal frame above and the
+-- red close X under every theme (user request, 2026-10-25), as Retail's
+-- EditModeSystemSettingsDialog wears DialogBorderTranslucentTemplate and
+-- UIPanelCloseButton at its TOPRIGHT (RetailFrameXML 12.1.0.69933,
+-- Blizzard_EditMode/Shared/EditModeDialogs.xml:254-285). The close X sits at
+-- the 17-unit size and 9-unit inset the bag windows use on the same frame.
+-- `drawerGap` keeps the drawer's frame clear of the edit window's.
+M.editModeChrome = {
+  close = { size = 17, right = 9, top = 9 },
+  drawerGap = 4,
 }
 
 -- The Game Settings housing keeps Forever's ButtonFrameTemplateNoPortrait

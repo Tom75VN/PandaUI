@@ -1535,6 +1535,7 @@ local function Start()
       default = { point = "TOPLEFT", relativePoint = "TOPLEFT",
                   x = 20, y = -320 },
       visible = function() return Enabled() end,
+      scalable = true,
     })
   end
 

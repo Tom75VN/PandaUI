@@ -155,12 +155,10 @@ end
 -- ---------------------------------------------------------------------------
 -- Fonts
 --
--- behavior.json / fonts.pfui_path_and_measure.v1 (BROKEN,
--- RUNTIME_FAILURE_CONFIRMED): SetFont returns cleanly while silently keeping
--- the inherited font object, and GetFont reports the inherited state rather
--- than the request. GetFont therefore cannot verify that a size was applied.
---
--- Detect by measurement instead: render the same sample at two very different
+-- fonts.pfui_path_and_measure.v1 (an Unreal-era record with no Octo
+-- counterpart) found SetFont silently keeping the inherited font object. On
+-- Octo, SetFont with a bundled TTF works (knowledge.json /
+-- fonts.enus_client_font_lacks_cyrillic_cjk); size detection still measures: render the same sample at two very different
 -- sizes and keep the first path whose width actually changes. Resolved once and
 -- cached, because the probe frame costs a real font load.
 -- ---------------------------------------------------------------------------
@@ -194,11 +192,44 @@ function U.GetFontChoice(role)
   return fallback
 end
 
+-- Puts the client's own face back: the inherited FontObject, then, for a label
+-- that once drew a bundled face, the exact path/size/flags it reported when
+-- first styled, because an explicit SetFont is not guaranteed to yield to
+-- SetFontObject.
 local function RestoreOriginalFont(record)
   local fontstring = record.fontstring
   local original = record.original or U.G("GameFontNormal")
-  if not original or not fontstring.SetFontObject then return false end
-  return pcall(fontstring.SetFontObject, fontstring, original)
+  local ok = false
+  if original and fontstring.SetFontObject then
+    ok = pcall(fontstring.SetFontObject, fontstring, original)
+  end
+  local face = record.originalFace
+  if record.directFont and face and fontstring.SetFont then
+    if pcall(fontstring.SetFont, fontstring, face[1], face[2], face[3] or "") then
+      ok = true
+    end
+  end
+  return ok
+end
+
+-- A bundled face goes through FontString:SetFont(path, size, flags), which
+-- draws an AddOns TTF on Octo (knowledge.json /
+-- fonts.enus_client_font_lacks_cyrillic_cjk, probe fontglyph.v1). The request
+-- is read back through GetFont: if the client kept another face, the label
+-- falls back to the original one rather than drawing in an unconfirmed face.
+local function SetBundledFont(record, media)
+  local fontstring = record.fontstring
+  if not fontstring.SetFont then return false end
+  if not pcall(fontstring.SetFont, fontstring, media.path, record.size,
+               record.flags or "") then
+    return false
+  end
+  record.directFont = true
+
+  local ok, path = pcall(function() return fontstring:GetFont() end)
+  if not ok or type(path) ~= "string" then return true end
+  local stem = string.lower((string.gsub(media.file, "%.[^%.]+$", "")))
+  return string.find(string.lower(path), stem, 1, true) ~= nil
 end
 
 local function EnsureCustomFont(record)
@@ -216,8 +247,8 @@ end
 
 -- "Original" normally means the inherited stock object, size and all, so a
 -- requested size is dropped. A label marked exactSize keeps the stock face and
--- flags but at its own size, through a private named Font (the same route as
--- below; FontString:SetFont is the silent-failure path).
+-- flags but at its own size, through a private named Font
+-- (fonts.original_choice_drops_requested_size, user-confirmed).
 local function ApplyOriginalAtSize(record, keepSize)
   local fontstring = record.fontstring
   local original = record.original or U.G("GameFontNormal")
@@ -237,6 +268,8 @@ local function ApplyOriginalAtSize(record, keepSize)
   local setOk = pcall(function()
     font:SetFont(path, size, flags or "")
     fontstring:SetFontObject(font)
+    -- An earlier bundled face was set explicitly; override it the same way.
+    if record.directFont then fontstring:SetFont(path, size, flags or "") end
     if colorOk and type(r) == "number" and type(g) == "number" and type(b) == "number" then
       fontstring:SetTextColor(r, g, b, a or 1)
     end
@@ -246,22 +279,36 @@ end
 
 local function ApplyFontRecord(record)
   local fontstring = record.fontstring
-  local choice = U.GetFontChoice(record.role)
+  -- A pinned face (U.SetFontFace) ignores the global choice: the font
+  -- dropdown draws each row in the face it names.
+  local choice = record.fixedFontId or U.GetFontChoice(record.role)
+  local media = choice ~= "original" and M.fontById[choice] or nil
   local applied = false
 
-  -- Explicitly opted-in overlay labels use the verified shadow-free named
-  -- Font route. Never clear a shared inherited font's shadow. Keep this flag
-  -- on the record so changing the global font choice cannot restore shadows.
+  -- Explicitly opted-in overlay labels stay shadow-free. A bundled face uses
+  -- the direct SetFont route; the client's own face uses the verified
+  -- shadow-free named Font route. Never clear a shared inherited font's
+  -- shadow. Keep this flag on the record so changing the global font choice
+  -- cannot restore shadows.
+  if record.shadowFree and media then
+    applied = SetBundledFont(record, media)
+    if applied then
+      U.ClearTextShadow(fontstring)
+      return true
+    end
+    media = nil
+  end
+
   if record.shadowFree then
-    local media = M.fontById[choice]
-    local path = media and media.path or M.fontCandidates[1]
-    local size = choice == "original" and record.originalSize or record.size
+    local path = M.fontCandidates[1]
+    local size = record.originalSize or record.size
     local colorOk, r, g, b, a = pcall(function() return fontstring:GetTextColor() end)
     local font = EnsureCustomFont(record)
     if font then
       local ok = pcall(function()
-        font:SetFont(path, size or record.size)
+        font:SetFont(path, size)
         fontstring:SetFontObject(font)
+        if record.directFont then fontstring:SetFont(path, size) end
         local bound = fontstring:GetFontObject()
         if not bound or bound:GetName() ~= font:GetName() then return end
         -- A newly created Font has no reliable white default. Preserve the
@@ -287,17 +334,7 @@ local function ApplyFontRecord(record)
     end
     if not applied then applied = RestoreOriginalFont(record) end
   else
-    local media = M.fontById[choice]
-    local font = media and EnsureCustomFont(record)
-    if font and font.SetFont and fontstring.SetFontObject then
-      local setOk = pcall(font.SetFont, font, media.path, record.size,
-                          record.flags or "")
-      local attachOk = false
-      if setOk then
-        attachOk = pcall(fontstring.SetFontObject, fontstring, font)
-      end
-      applied = setOk and attachOk
-    end
+    if media then applied = SetBundledFont(record, media) end
 
     -- A missing or rejected font file must never make text disappear.
     if not applied then RestoreOriginalFont(record) end
@@ -310,8 +347,31 @@ function U.ApplyFontChoice(role)
   role = NormaliseFontRole(role)
   local fontstring, record
   for fontstring, record in pairs(styledFonts) do
-    if record.role == role then ApplyFontRecord(record) end
+    if record.role == role then
+      ApplyFontRecord(record)
+      -- Restoring the inherited FontObject can bring its own shadow back.
+      if not record.shadowFree then U.SetTextShadow(fontstring) end
+    end
   end
+end
+
+-- Pins one styled FontString to a font id ("original" or an M.fonts id),
+-- whatever the global choice. nil unpins it. Returns whether it applied.
+function U.SetFontFace(fontstring, fontId)
+  if not fontstring then return false end
+  if fontId ~= nil and fontId ~= "original" and not M.fontById[fontId] then
+    return false
+  end
+  local record = styledFonts[fontstring]
+  if not record then
+    U.SetFont(fontstring, M.fontSize.normal)
+    record = styledFonts[fontstring]
+    if not record then return false end
+  end
+  record.fixedFontId = fontId
+  local applied = ApplyFontRecord(record)
+  if not record.shadowFree then U.SetTextShadow(fontstring) end
+  return applied
 end
 
 function U.SetFontChoice(role, value)
@@ -457,12 +517,11 @@ function U.ClearTextShadow(fontstring)
   return colorOk and offsetOk
 end
 
--- Applies the selected font through a private named Font object. Direct
--- FontString:SetFont is intentionally not used: that is the silent-failure
--- path confirmed by fonts.pfui_path_and_measure.v1. Each FontString gets its
--- own Font object so later text-colour changes cannot leak into another label.
--- The original inherited object is retained for the "Original" option and as
--- a safe fallback if the documented custom-font route is unavailable.
+-- Applies the selected font. A bundled face goes through FontString:SetFont
+-- (see SetBundledFont); the client's own face is the inherited FontObject, or
+-- a private named Font for exactSize/flags labels. The original inherited
+-- object is retained for the "Original" option and as the safe fallback
+-- whenever a bundled face is not confirmed by readback.
 -- exactSize: honour `size` under the "original" font choice too (see
 -- ApplyOriginalAtSize); otherwise that choice keeps the inherited size.
 function U.SetFont(fontstring, size, flags, role, shadowFree, exactSize)
@@ -474,6 +533,11 @@ function U.SetFont(fontstring, size, flags, role, shadowFree, exactSize)
     if fontstring.GetFontObject then
       local ok, original = pcall(fontstring.GetFontObject, fontstring)
       if ok then record.original = original end
+    end
+    local faceOk, facePath, faceSize, faceFlags =
+      pcall(function() return fontstring:GetFont() end)
+    if faceOk and type(facePath) == "string" and type(faceSize) == "number" then
+      record.originalFace = { facePath, faceSize, faceFlags }
     end
     if shadowFree then
       local ok, _, height = pcall(function() return fontstring:GetFont() end)
@@ -678,16 +742,13 @@ end
 -- ---------------------------------------------------------------------------
 function U.HideRegion(region)
   if not region then return false end
+  -- Called every frame from the tooltip updater: no closures here, they were
+  -- its garbage (knowledge.json / perf.pandaui_only_stutter).
+  if type(region) ~= "table" then return true end
 
-  pcall(function()
-    if region.SetTexture then region:SetTexture(nil) end
-  end)
-  pcall(function()
-    if region.SetAlpha then region:SetAlpha(0) end
-  end)
-  pcall(function()
-    if region.Hide then region:Hide() end
-  end)
+  if region.SetTexture then pcall(region.SetTexture, region, nil) end
+  if region.SetAlpha then pcall(region.SetAlpha, region, 0) end
+  if region.Hide then pcall(region.Hide, region) end
   return true
 end
 

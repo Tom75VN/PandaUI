@@ -1872,12 +1872,12 @@ end
 -- The page owns its whole content frame now, so every offset below is measured
 -- from its own top rather than from a block another module stacked above it.
 -- ---------------------------------------------------------------------------
-local PAGE_WIDTH = 484
-local FILTER_COLUMN_X = 160
+local PAGE_WIDTH = U.SETTINGS_PAGE_WIDTH
+local FILTER_COLUMN_X = math.floor(PAGE_WIDTH / 3)
 
 -- Two columns keep the toggles to five compact rows and leave the colour
 -- controls inside the fixed-height settings panel.
-local TOGGLE_COLUMN_X = 240
+local TOGGLE_COLUMN_X = U.SETTINGS_COLUMN_X
 
 -- The client's own display is modules/buffframe.lua's frames, not this
 -- module's rows, so this toggle reads and writes through that module rather

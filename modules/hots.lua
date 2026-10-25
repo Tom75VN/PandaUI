@@ -1222,7 +1222,7 @@ end
 -- `y` is where the caller wants this section's heading, so the party page can
 -- move it without this file knowing what sits above it.
 -- ---------------------------------------------------------------------------
-local SETTINGS_COLUMN_X = 258
+local SETTINGS_COLUMN_X = U.SETTINGS_COLUMN_X
 local SETTINGS_SLIDER_WIDTH = 200
 
 local SLIDERS = {
@@ -1237,7 +1237,7 @@ function U.BuildHotSettings(parent, y, width)
 
   local header = U.CreateSectionHeader(parent, {
     text = U.L("HOTS_HEADER"),
-    width = width or 484,
+    width = width or U.SETTINGS_PAGE_WIDTH,
     y = y,
   })
   table.insert(widgets, header)

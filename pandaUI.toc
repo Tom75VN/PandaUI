@@ -2,7 +2,7 @@
 ## Title: |cffffffffPanda |cfff5ae0aUI
 ## Notes: UI addon for the OctoWoW client (1.12.1, Lua 5.0), ported from UnrealUI.
 ## Author: Thomas
-## Version: 0.11.2
+## Version: 0.12.0
 ## X-Ported-From: UnrealUI 0.10.2
 ## X-License: MIT
 ## SavedVariables: PandaUIDB, PandaUIProfiles, PandaUIDiagDB, PandaUIPriceDB
