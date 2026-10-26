@@ -50,7 +50,7 @@ local LABEL_WIDTH = COLUMN_X - 20
 -- the section's.
 local DROPDOWN_WIDTH = 200
 local HEALTH_DROPDOWN_WIDTH = COLUMN_X - 8
-local HEALTH_SECTION_HEIGHT = 68
+local HEALTH_SECTION_HEIGHT = 204 -- health, power and size blocks
 
 local function ModernPortraits()
   return type(U.GetActiveThemeStyle) == "function" and
@@ -79,9 +79,13 @@ local PARTY_LAYOUT = {
   height = 292,
 }
 
+-- The party aura icon-size slider sits between the switches and the HoT
+-- section, which moves down by this much.
+local PARTY_ICON_SLIDER_HEIGHT = 64
+
+-- No HoT size slider: the icon-size slider above sizes the HoTs too.
 local PARTY_HOT_SLIDERS = {
-  { key = "size", textKey = "HOTS_SIZE", column = 0 },
-  { key = "spacing", textKey = "HOTS_SPACING", column = 1 },
+  { key = "spacing", textKey = "HOTS_SPACING", column = 0 },
 }
 
 -- A caption sits 30 below the last row of the group above it and 22 above its
@@ -234,11 +238,113 @@ local function BuildHealthTextControls(frame, pad, contentTop, widgets,
                  contentTop - 38)
   controls.healthRight = right
   table.insert(widgets, right)
+
+  -- Power text: the same two selectors, one block below.
+  local top = contentTop - 68
+  AddCaption(frame, widgets, pad, top, U.L("UF_POWER_TEXT_HEADER"),
+             CONTENT_WIDTH)
+  local sides = {
+    { key = "left", caption = "UF_HEALTH_TEXT_LEFT", x = pad,
+      field = "powerLeft", name = "PowerTextLeft" },
+    { key = "right", caption = "UF_HEALTH_TEXT_RIGHT", x = pad + COLUMN_X,
+      field = "powerRight", name = "PowerTextRight" },
+  }
+  local i
+  for i = 1, 2 do
+    local side = sides[i]
+    local label = U.CreateSettingsLabel(frame, {
+      size = M.fontSize.small,
+      color = M.color.accent,
+      inherits = "GameFontNormalSmall",
+      justify = "LEFT",
+      width = HEALTH_DROPDOWN_WIDTH,
+    })
+    if label then
+      label:SetPoint("TOPLEFT", frame, "TOPLEFT", side.x, top - 22)
+      label:SetText(U.L(side.caption))
+      table.insert(widgets, label)
+    end
+    local dropdown = U.CreateDropdown(frame, {
+      name = namePrefix .. side.name,
+      width = HEALTH_DROPDOWN_WIDTH,
+      height = 24,
+      rowHeight = 20,
+      value = U.GetUnitFramePowerTextSetting(side.key),
+      items = {
+        { value = "default", text = U.L("UF_POWER_TEXT_DEFAULT") },
+        { value = "hidden", text = U.L("UF_HEALTH_TEXT_HIDDEN") },
+        { value = "percent", text = U.L("UF_HEALTH_TEXT_PERCENT") },
+        { value = "number", text = U.L("UF_POWER_TEXT_VALUE") },
+      },
+      onChange = function(value)
+        U.SetUnitFramePowerTextSetting(side.key, value)
+      end,
+    })
+    dropdown.SetPoint("TOPLEFT", frame, "TOPLEFT", side.x, top - 38)
+    controls[side.field] = dropdown
+    table.insert(widgets, dropdown)
+  end
+
+  -- Text size: one selector per bar, one more block below.
+  top = contentTop - 136
+  AddCaption(frame, widgets, pad, top, U.L("UF_TEXT_SIZE_HEADER"),
+             CONTENT_WIDTH)
+  local sizes = {
+    { kind = "health", caption = "UF_TEXT_SIZE_HEALTH", x = pad,
+      field = "healthSize", name = "HealthTextSize" },
+    { kind = "power", caption = "UF_TEXT_SIZE_POWER", x = pad + COLUMN_X,
+      field = "powerSize", name = "PowerTextSize" },
+  }
+  for i = 1, 2 do
+    local side = sizes[i]
+    local label = U.CreateSettingsLabel(frame, {
+      size = M.fontSize.small,
+      color = M.color.accent,
+      inherits = "GameFontNormalSmall",
+      justify = "LEFT",
+      width = HEALTH_DROPDOWN_WIDTH,
+    })
+    if label then
+      label:SetPoint("TOPLEFT", frame, "TOPLEFT", side.x, top - 22)
+      label:SetText(U.L(side.caption))
+      table.insert(widgets, label)
+    end
+    local dropdown = U.CreateDropdown(frame, {
+      name = namePrefix .. side.name,
+      width = HEALTH_DROPDOWN_WIDTH,
+      height = 24,
+      rowHeight = 20,
+      value = U.GetUnitFrameTextSize(side.kind),
+      items = {
+        { value = 0, text = U.L("UF_POWER_TEXT_DEFAULT") },
+        { value = 6, text = "6" },
+        { value = 7, text = "7" },
+        { value = 8, text = "8" },
+        { value = 9, text = "9" },
+        { value = 10, text = "10" },
+        { value = 11, text = "11" },
+        { value = 12, text = "12" },
+        { value = 13, text = "13" },
+        { value = 14, text = "14" },
+        { value = 16, text = "16" },
+      },
+      onChange = function(value)
+        U.SetUnitFrameTextSize(side.kind, value)
+      end,
+    })
+    dropdown.SetPoint("TOPLEFT", frame, "TOPLEFT", side.x, top - 38)
+    controls[side.field] = dropdown
+    table.insert(widgets, dropdown)
+  end
 end
 
 local function RefreshHealthTextControls(controls)
   controls.healthLeft.SetValue(U.GetUnitFrameHealthTextSetting("left"))
   controls.healthRight.SetValue(U.GetUnitFrameHealthTextSetting("right"))
+  controls.powerLeft.SetValue(U.GetUnitFramePowerTextSetting("left"))
+  controls.powerRight.SetValue(U.GetUnitFramePowerTextSetting("right"))
+  controls.healthSize.SetValue(U.GetUnitFrameTextSize("health"))
+  controls.powerSize.SetValue(U.GetUnitFrameTextSize("power"))
 end
 
 -- The player frame's own group, filling its columns left to right. A spec
@@ -499,7 +605,11 @@ local function BuildPartyPanel(frame, contentTop, contentWidth)
   local pad = U.MoverPanelPad()
   local widgets = {}
   local controls = {}
-  local portraitOffset = ModernPortraits() and ROW_PITCH or 0
+  -- One extra row: Modern's portrait switch, or the raid-style switch under
+  -- classic-wow / modern-wow (U.PartyRaidStyleAvailable).
+  local raidStyle = type(U.PartyRaidStyleAvailable) == "function" and
+                    U.PartyRaidStyleAvailable()
+  local portraitOffset = (ModernPortraits() or raidStyle) and ROW_PITCH or 0
 
   BuildHealthTextControls(frame, pad, contentTop, widgets, controls,
                           "PandaUIPartyFrameMover")
@@ -564,9 +674,46 @@ local function BuildPartyPanel(frame, contentTop, contentWidth)
     end,
   })
   portrait3d.SetPoint("TOPLEFT", frame, "TOPLEFT", pad,
-                      contentTop - 2 * ROW_PITCH - portraitOffset)
+                      contentTop - 2 * ROW_PITCH -
+                      (ModernPortraits() and ROW_PITCH or 0))
   controls.portrait3d = portrait3d
   table.insert(widgets, portrait3d)
+
+  if raidStyle and not ModernPortraits() then
+    local raid = U.CreateCheckbox(frame, {
+      name = "PandaUIPartyFrameMoverRaidStyle",
+      text = U.L("UF_MOVER_PARTY_RAID_STYLE"),
+      textWidth = contentWidth - 20,
+      value = U.GetUnitFramePartySetting("partyRaidStyle"),
+      onChange = function(value)
+        U.SetUnitFramePartySetting("partyRaidStyle", value)
+      end,
+    })
+    raid.SetPoint("TOPLEFT", frame, "TOPLEFT", pad, contentTop - 3 * ROW_PITCH)
+    controls.partyRaidStyle = raid
+    table.insert(widgets, raid)
+  end
+
+  if type(U.AuraPartyIconSizeLimits) == "function" then
+    local min, max, step = U.AuraPartyIconSizeLimits()
+    local iconSize = U.CreateSlider(frame, {
+      name = "PandaUIPartyFrameMoverIconSize",
+      text = U.L("UF_MOVER_PARTY_ICON_SIZE"),
+      width = PARTY_LAYOUT.sliderWidth,
+      boxWidth = 60,
+      min = min,
+      max = max,
+      step = step,
+      value = U.GetAuraSetting("partyIconSize"),
+      onChange = function(value) U.SetAuraSetting("partyIconSize", value) end,
+    })
+    iconSize.SetPoint("TOPLEFT", frame, "TOPLEFT", pad,
+                      contentTop - PARTY_LAYOUT.hotCaption - portraitOffset -
+                      10)
+    controls.partyIconSize = iconSize
+    table.insert(widgets, iconSize)
+  end
+  portraitOffset = portraitOffset + PARTY_ICON_SLIDER_HEIGHT
 
   AddCaption(frame, widgets, pad,
              contentTop - PARTY_LAYOUT.hotCaption - portraitOffset,
@@ -659,6 +806,13 @@ local function BuildPartyPanel(frame, contentTop, contentWidth)
     RefreshHealthTextControls(controls)
     controls.partyPlayer.SetValue(U.GetUnitFramePartySetting("partyPlayer"))
     controls.partyPets.SetValue(U.GetUnitFramePartySetting("partyPets"))
+    if controls.partyIconSize then
+      controls.partyIconSize.SetValue(U.GetAuraSetting("partyIconSize"))
+    end
+    if controls.partyRaidStyle then
+      controls.partyRaidStyle.SetValue(
+        U.GetUnitFramePartySetting("partyRaidStyle"))
+    end
     if controls.portrait then
       controls.portrait.SetValue(U.GetPortraitEnabled("party"))
       controls.portrait3d.SetEnabled(U.GetPortraitEnabled("party"))
@@ -677,16 +831,35 @@ local function BuildPartyPanel(frame, contentTop, contentWidth)
   return widgets, Refresh
 end
 
--- The pet mover has no frame-specific layout controls; it still exposes the
--- shared health readout because that setting changes its health bar too.
-local function BuildPetPanel(frame, contentTop)
+-- The pet mover carries the shared health readout, which changes its health
+-- bar too, and the pet's own 2D/3D portrait switch. Under Modern the pet's
+-- portrait is shown with the player's, so the switch follows that visibility.
+local function BuildPetPanel(frame, contentTop, contentWidth)
+  local pad = U.MoverPanelPad()
   local widgets = {}
   local controls = {}
-  BuildHealthTextControls(frame, U.MoverPanelPad(), contentTop, widgets,
+  BuildHealthTextControls(frame, pad, contentTop, widgets,
                           controls, "PandaUIPetFrameMover")
+
+  local portrait3d = U.CreateCheckbox(frame, {
+    name = "PandaUIPetFrameMoverPortrait3D",
+    text = U.L("UF_MOVER_PORTRAIT_3D"),
+    textWidth = contentWidth - 20,
+    value = U.GetPortrait3D("pet"),
+    onChange = function(value)
+      U.SetPortrait3D("pet", value)
+    end,
+  })
+  portrait3d.SetPoint("TOPLEFT", frame, "TOPLEFT", pad,
+                      contentTop - HEALTH_SECTION_HEIGHT)
+  table.insert(widgets, portrait3d)
 
   local function Refresh()
     RefreshHealthTextControls(controls)
+    if ModernPortraits() then
+      portrait3d.SetEnabled(U.GetPortraitEnabled("pet"))
+    end
+    portrait3d.SetValue(U.GetPortrait3D("pet"))
   end
 
   return widgets, Refresh
@@ -730,7 +903,20 @@ local function BuildTargetTargetPanel(frame, contentTop, contentWidth)
                       pad + (portrait and COLUMN_X or 0), contentTop)
   table.insert(widgets, portrait3d)
 
+  local enabled = U.CreateCheckbox(frame, {
+    name = "PandaUITargetTargetFrameMoverEnabled",
+    text = U.L("UF_MOVER_TARGET_TARGET_ENABLED"),
+    textWidth = contentWidth - 20,
+    value = U.GetTargetTargetEnabled(),
+    onChange = function(value)
+      U.SetTargetTargetEnabled(value)
+    end,
+  })
+  enabled.SetPoint("TOPLEFT", frame, "TOPLEFT", pad, contentTop - ROW_PITCH)
+  table.insert(widgets, enabled)
+
   local function Refresh()
+    enabled.SetValue(U.GetTargetTargetEnabled())
     if portrait then
       portrait.SetValue(U.GetPortraitEnabled("targettarget"))
       portrait3d.SetEnabled(U.GetPortraitEnabled("targettarget"))
@@ -787,23 +973,28 @@ function UFC:OnInit()
   U.RegisterMoverPanel(TARGET_TARGET_MOVER_ID, {
     name = "PandaUITargetTargetFrameMoverSettings",
     width = CONTENT_WIDTH + U.MoverPanelPad() * 2,
-    height = -U.MoverPanelContentTop() + 26,
+    height = -U.MoverPanelContentTop() + 26 + ROW_PITCH,
     build = BuildTargetTargetPanel,
     title = function() return U.L("MOVER_LABEL_TARGET_TARGET") end,
     available = function()
       return type(U.GetPortrait3D) == "function" and
-             type(U.SetPortrait3D) == "function"
+             type(U.SetPortrait3D) == "function" and
+             type(U.GetTargetTargetEnabled) == "function"
     end,
   })
 
   U.RegisterMoverPanel(PET_MOVER_ID, {
     name = "PandaUIPetFrameMoverSettings",
     width = CONTENT_WIDTH + U.MoverPanelPad() * 2,
-    height = -U.MoverPanelContentTop() + HEALTH_SECTION_HEIGHT + 4,
+    height = -U.MoverPanelContentTop() + HEALTH_SECTION_HEIGHT + 14 + 12,
     build = BuildPetPanel,
     title = function() return U.L("MOVER_LABEL_PET") end,
     available = function()
-      return type(U.GetUnitFrameHealthTextSetting) == "function"
+      return type(U.GetUnitFrameHealthTextSetting) == "function" and
+             type(U.GetUnitFramePowerTextSetting) == "function" and
+             type(U.GetUnitFrameTextSize) == "function" and
+             type(U.GetPortrait3D) == "function" and
+             type(U.SetPortrait3D) == "function"
     end,
   })
 
@@ -811,8 +1002,11 @@ function UFC:OnInit()
     name = "PandaUIPartyFrameMoverSettings",
     width = CONTENT_WIDTH + U.MoverPanelPad() * 2,
     height = function()
+      local raidStyle = type(U.PartyRaidStyleAvailable) == "function" and
+                        U.PartyRaidStyleAvailable()
       return PARTY_LAYOUT.height + HEALTH_SECTION_HEIGHT +
-             (ModernPortraits() and ROW_PITCH or 0)
+             PARTY_ICON_SLIDER_HEIGHT +
+             ((ModernPortraits() or raidStyle) and ROW_PITCH or 0)
     end,
     build = BuildPartyPanel,
     title = function() return U.L("MOVER_LABEL_PARTY") end,

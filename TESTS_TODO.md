@@ -17,6 +17,18 @@ Knowledge records: `perf.pandaui_only_stutter`,
 - [x] S1-S4. Done 2026-10-25: the stutter is Lua garbage collection (~158 KB/s from pandaUI); tooltip, mover and status updaters fixed.
 - [x] S5. Probe re-run 2026-10-25: 21 KB/s (was 158), no collection or hitch in 120 s. Still owed: confirm the freeze is gone in normal play. Re-run after the fix: `/reload` (or relaunch), pandaUI and PandaRuntimeProbe enabled, same spot, standing still, `/prp puistutter`, then `/prp reload` after "results saved". Report any Lua error, and whether the once-a-minute freeze is gone in normal play.
 
+- [ ] S6. Stutter in the mine with all addons (reported 2026-10-26). Probe `PandaRuntimeProbe/AddonStutterProbe.lua`, group `addonstutter` (splits the stutter per addon). Relaunch once (new TOC file), go to the mine spot where it stutters, all addons enabled, play normally, `/prp addonstutter` (~200 s, addons blink off/on in its second half), then `/prp reload` after "results saved". Report any Lua error.
+
+## Raid-style party frames (coded 2026-10-26)
+
+Code: `modules/raidframes.lua` (party block), `modules/unitframes.lua`
+(`partyRaidStyle`). Knowledge record: `raidframes.pandaui_forever_compact_unverified`.
+
+- [ ] RP1. modern-wow: Unit Frames > Party Frames, tick "Draw party frames like the raid frames". In a party (or `/pui party test`) the party shows as raid cells in one column, player on top; old party rows gone.
+- [ ] RP2. Edit mode: the Party handle covers the column and moves it; the Party panel has "Raid-style frames" and it switches live.
+- [ ] RP3. Left-click targets, right-click opens the party menu, HoTs and debuffs show like the raid frames.
+- [ ] RP4. classic-wow (Modern WoW party module off): tick the option, `/reload`; the client's party frames are gone and the raid cells show. Untick, `/reload`: client frames back.
+
 ## Edit mode alignment guides (coded 2026-10-25, v4 confirmed in game 2026-10-26)
 
 Code: `core/mover.lua` (`AlignDelta`, `AlignedLine`, `UpdateAlignmentGuides`).
@@ -135,3 +147,10 @@ Code: `modules/nameplates.lua`, `modules/nameplatesettings.lua`,
 
 - [ ] 47. In a crowded area (30+ plates): no stutter, no Lua errors.
 - [ ] 48. Plates update correctly after zoning, dying and `/reload`.
+
+## Action bar slot background per bar (coded 2026-10-26)
+
+Code: `modules/actionbar.lua` (`modernWowAction.SyncFace`, `classicAction.ApplySlotFill`), `modules/actionbarconfig.lua`.
+
+- [ ] SB1. modern-wow: `/reload`, enable bars 2 and 3. Settings > ActionBars > Bar 2: tick "Show Slot Background"; bar 2 slots get Bar 1's filled plate, bar 3 stays unfilled. Untick: plate goes, icons widen to the ring. Same from the edit-mode bar panel.
+- [ ] SB2. classic-wow (Action Bar 1 only or any bar 2-10): tick it on bar 2; its empty slots show the dark stock slot fill, filled slots look normal. Untick restores the old look. Report if nothing changes or a slot goes blank.

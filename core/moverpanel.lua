@@ -197,9 +197,8 @@ local function BuildSpec(spec)
   })
   table.insert(spec.widgets, spec.header)
 
-  -- Closing is deselecting: the panel exists because a handle is selected, so
-  -- the button goes through U.CloseMoverPanel rather than hiding the window and
-  -- leaving a selected anchor with nothing beside it.
+  -- Closing hides the panel only: the handle stays selected (U.CloseMoverPanel
+  -- -> U.DismissMoverPanel) and a plain click on it brings the panel back.
   spec.close = U.CreateRedCloseButton(frame, {
     name = spec.name and (spec.name .. "Close") or nil,
     size = CLOSE_SIZE,
@@ -443,12 +442,12 @@ function U.ShowMoverPanel(id, anchor)
   return true
 end
 
--- The close button's action. The panel is the selected anchor's, so this
--- deselects the anchor in core/mover.lua, which calls back into
--- U.HideMoverPanel. The direct hide is the fallback for a panel that is
--- somehow up with no selection behind it.
+-- The close button's action. It hides the panel but keeps the anchor selected
+-- in core/mover.lua, so the anchor can be moved without the panel in the way.
+-- The direct hide is the fallback for a panel that is somehow up with no
+-- selection behind it.
 function U.CloseMoverPanel()
-  if type(U.ClearMoverSelection) == "function" and U.ClearMoverSelection() then
+  if type(U.DismissMoverPanel) == "function" and U.DismissMoverPanel() then
     return true
   end
   U.HideMoverPanel()

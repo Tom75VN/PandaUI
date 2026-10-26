@@ -128,6 +128,10 @@ local defaults = {
   targetBuffEnabled = true,
   partyEnabled      = true,
   partyBuffEnabled  = true,
+  -- Party aura icons, in percent of their built size (user request,
+  -- 2026-10-26). The rows are children of the scaled party mover, so 120 is
+  -- 20 % larger than the icon at the current mover scale.
+  partyIconSize     = 100,
   showTimers        = true,
   belowFrame        = false,
   size              = 24,
@@ -179,10 +183,35 @@ function U.SetAuraSetting(key, value)
   if defaults[key] == nil then return false end
   Config()[key] = value
   U.ApplyAuras()
+  -- The party HoT icons (modules/hots.lua IconSize) and the raid-style party
+  -- column (modules/raidframes.lua partyGeo) share this size.
+  if key == "partyIconSize" then
+    if type(U.ApplyHotIndicators) == "function" then
+      pcall(U.ApplyHotIndicators)
+    end
+    if type(U.ApplyRaidPartyStyle) == "function" then
+      pcall(U.ApplyRaidPartyStyle)
+    end
+  end
   if type(U.RefreshUnitFrameSettingsViews) == "function" then
     U.RefreshUnitFrameSettingsViews()
   end
   return true
+end
+
+local PARTY_ICON_LIMITS = { min = 50, max = 200, step = 10 }
+
+function U.AuraPartyIconSizeLimits()
+  return PARTY_ICON_LIMITS.min, PARTY_ICON_LIMITS.max, PARTY_ICON_LIMITS.step
+end
+
+-- The party rows are the only rows drawn beside a frame (BuildRow `beside`).
+local function PartyIconScale(row)
+  if not row.beside then return 1 end
+  local value = tonumber(U.GetAuraSetting("partyIconSize")) or 100
+  if value < PARTY_ICON_LIMITS.min then value = PARTY_ICON_LIMITS.min end
+  if value > PARTY_ICON_LIMITS.max then value = PARTY_ICON_LIMITS.max end
+  return value / 100
 end
 
 -- ---------------------------------------------------------------------------
@@ -928,8 +957,9 @@ local function PositionRow(row, below, offset)
       -- The buff line closes 4 units on the debuff line above it, by request.
       if not row.harmful then lift = lift + 4 end
     end
+    -- The two lines' offsets grow with the icons so they never overlap.
     row:SetPoint("LEFT", row.anchor, "RIGHT", ROW_GAP + rightOffset,
-                 (row.besideY or 0) + lift)
+                 (row.besideY or 0) * PartyIconScale(row) + lift)
     return
   end
 
@@ -1193,7 +1223,7 @@ end
 -- icons and keep primary rows within the art's bar opening. Other themes have
 -- no layout table and therefore retain the existing settings unchanged.
 local function RowGeometry(row)
-  local size = row.size or U.GetAuraSetting("size")
+  local size = (row.size or U.GetAuraSetting("size")) * PartyIconScale(row)
   local spacing = row.spacing or U.GetAuraSetting("spacing")
   local perRow = row.perRow or U.GetAuraSetting("perRow")
   local layout = row.anchor and row.anchor.puiAuraLayout

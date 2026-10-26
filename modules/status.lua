@@ -589,7 +589,7 @@ function S:OnEnable()
   U.RegisterUpdate("status.population.refresh", POP_REFRESH_INTERVAL, RefreshPopulation)
 
   U.RegisterEvent("PLAYER_MONEY", RefreshMoney)
-  U.RegisterEvent("UPDATE_INVENTORY_DURABILITY", RefreshDurability)
+  U.RegisterEvent("UPDATE_INVENTORY_ALERTS", RefreshDurability)
   U.RegisterEvent("UNIT_INVENTORY_CHANGED", function(event, unit)
     if not unit or unit == "player" then RefreshDurability() end
   end)

@@ -2152,9 +2152,15 @@ if type(U.RegisterEvent) == "function" then
   U.RegisterEvent("PLAYER_LEAVING_WORLD", function() nudgeKeys.Release() end)
 end
 
-local function SetActiveMover(entry)
+-- True once the user closed the selected anchor's panel. The anchor stays
+-- selected so it can be moved without the panel in the way; dragging it does
+-- not bring the panel back, a plain click on it does.
+local panelDismissed = false
+
+local function SetActiveMover(entry, reopenPanel)
   local previous = activeMover
   activeMover = entry
+  if entry ~= previous or reopenPanel then panelDismissed = false end
   ApplyHandleState(previous)
   if entry ~= previous then ApplyHandleState(entry) end
 
@@ -2180,7 +2186,10 @@ local function SetActiveMover(entry)
   -- Which movers have a panel is not decided here: a module registers one for
   -- its own mover id (core/moverpanel.lua), and a mover with no registered
   -- panel simply selects with nothing beside it.
-  if entry and type(entry.id) == "string" and
+  if entry and panelDismissed then
+    -- Closed by the user for this selection: leave it down.
+    return
+  elseif entry and type(entry.id) == "string" and
      type(U.ShowMoverPanel) == "function" then
     U.ShowMoverPanel(entry.id, {
       id = entry.id, frame = entry.handle or entry.frame, label = entry.label,
@@ -2198,6 +2207,16 @@ end
 function U.ClearMoverSelection()
   if not activeMover then return false end
   SetActiveMover(nil)
+  return true
+end
+
+-- The contextual panel's close button: hides the panel but keeps the anchor
+-- selected (highlight, arrow-key nudging, click-outside deselect). Returns
+-- false when nothing is selected, so U.CloseMoverPanel falls back to a hide.
+function U.DismissMoverPanel()
+  if not activeMover then return false end
+  panelDismissed = true
+  if type(U.HideMoverPanel) == "function" then U.HideMoverPanel() end
   return true
 end
 
@@ -2307,7 +2326,12 @@ local function CreateHandle(entry)
 
   -- knowledge.json / scripts.handler_arguments_direct: these close over entry
   -- instead of depending on the callback argument shape.
+  -- dragGesture tells OnClick whether this press was a drag: a drag keeps a
+  -- closed panel closed, a plain click on the anchor reopens it.
+  input:SetScript("OnMouseDown", function() entry.dragGesture = nil end)
+
   input:SetScript("OnDragStart", function()
+    entry.dragGesture = true
     SetActiveMover(entry)
     entry.dragStarts = entry.dragStarts + 1
     StartDrag(entry)
@@ -2326,7 +2350,10 @@ local function CreateHandle(entry)
   -- way to poll a missed release back out of the shared updater.
   input:SetScript("OnMouseUp", function() StopDrag(entry) end)
 
-  input:SetScript("OnClick", function() SetActiveMover(entry) end)
+  input:SetScript("OnClick", function()
+    SetActiveMover(entry, not entry.dragGesture)
+    entry.dragGesture = nil
+  end)
 
   -- OnEnter is instrumentation as much as highlight: if the enter count stays
   -- at zero the client is not routing mouse input to the handle at all, which

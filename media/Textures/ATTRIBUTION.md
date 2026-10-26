@@ -10,6 +10,11 @@ sit directly in `media/Textures/`.
   cropped to its visible content, padded to a square, scaled down
   with premultiplied alpha to 64x64 and saved as an uncompressed 32-bit TGA.
   No other change to the art.
+- `../icons/pUI_settings-panda.tga`: panda watermark in the bottom-right corner
+  of the settings pages (`M.texture.settingsWatermark`, drawn by
+  `modules/settings.lua`). Supplied by the pandaUI author on 2026-10-26 as
+  `Panda/game-settings.png`, a 256x256 RGBA PNG. Conversion: saved unchanged
+  as an uncompressed 32-bit TGA (no resize, no change to the art).
 - `settings-panda-icon.tga`: round gold-rimmed panda face used as the minimap
   settings button (`M.texture.settingsIcon`, drawn by `modules/minimap.lua`).
   Supplied by the pandaUI author in chat on 2026-10-21 as a 64x64 RGBA PNG.

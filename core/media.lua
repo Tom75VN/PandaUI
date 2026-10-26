@@ -90,6 +90,10 @@ M.texture = {
   -- cropped to its art, padded square and downscaled with premultiplied
   -- alpha: the bottom-right settings watermark (modules/settings.lua).
   addonLogo = "Interface\\AddOns\\pandaUI\\media\\icons\\pUI_logo",
+  -- 256x256 TGA of the author's Panda/game-settings.png (already 256 px, no
+  -- resize): the default bottom-right settings watermark, drawn at 185 units
+  -- (modules/settings.lua).
+  settingsWatermark = "Interface\\AddOns\\pandaUI\\media\\icons\\pUI_settings-panda",
   -- 64x64 TGA of the author's pUI-logo-small.png, drawn at 18-20 units
   -- beside the Panda UI settings title (modules/gamesettings.lua).
   addonLogoSmall = "Interface\\AddOns\\pandaUI\\media\\icons\\pUI_logo-small",
@@ -4311,7 +4315,6 @@ M.trackedBars = {
   -- EditModeCooldownViewerSetting.IconLimit's maximum.
   maxBars = 20,
   limit = {
-    size    = { min = 50, max = 200, step = 10, default = 100 },
     padding = { min = 0,  max = 10,  step = 1,  default = 5 },
     width   = { min = 50, max = 200, step = 1,  default = 100 },
     opacity = { min = 50, max = 100, step = 1,  default = 100 },
@@ -4375,6 +4378,17 @@ M.modernWow.nameplate = {
   selectedTexCoord = { 0, 216 / 256, 0, 18 / 32 },
   selectedInset = { left = -3, top = 4, right = 3, bottom = -3 },
   healthHeight = 20,
+  -- The target cast bar under the plate, as UnrealUI draws it: Retail's
+  -- NamePlateCastingBarTemplate (RetailFrameXML 12.1) with the spell name in
+  -- the bar. NamePlateSetupOptions castBarHeight 16,
+  -- castBarToHealthBarSpacing 2, castBarFontHeight 12; the spark 4 wide and
+  -- CAST_BAR_SPARK_EXTRA_HEIGHT (8) taller than the bar; the name 2 right of
+  -- the icon and the timer 4 inside the right edge
+  -- (Blizzard_NamePlateCastingBar.lua 83/86). The icon is the bar's full
+  -- height. Plate units, before `scale`. Art: the Modern WoW cast bar's own
+  -- background, fill and spark (M.modernWow.texture.cast*).
+  cast = { height = 16, spacing = 2, font = 12,
+           sparkWidth = 4, sparkExtra = 8, textGap = 2, timeInset = 4 },
 }
 
 -- The micro bar under `modern-wow` and `modern` (user requests, 2026-09-28):

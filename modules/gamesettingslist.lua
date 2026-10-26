@@ -941,6 +941,7 @@ end
 -- it showed, exactly as a sub-row click does.
 function L.SweepNative()
   if L.sweeping or not gs.nativeShown then return end
+  gs.ResolveNativeCategories()
   local pending = {}
   local i, j
   for i = 1, table.getn(gs.PAGES) do
@@ -948,7 +949,8 @@ function L.SweepNative()
     if type(page.nativeCategories) == "table" then
       for j = 1, table.getn(page.nativeCategories) do
         local index = page.nativeCategories[j]
-        if not L.nativeIndex[index] and not L.nativeTried[index] then
+        if not L.nativeIndex[index] and not L.nativeTried[index] and
+           gs.IsNativeLeaf(index) then
           table.insert(pending, { page = page, index = index })
         end
       end

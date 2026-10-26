@@ -231,7 +231,8 @@ gs.NATIVE_OPTIONS_HIDE = {
 
 -- OctoWoW exposes one consolidated OptionsFrame. Its three header rows have no
 -- fields and must never be clicked; their child rows are the real pages
--- (settingsinventory.v2).
+-- (settingsinventory.v2). The row numbers below are this build's defaults;
+-- gs.ResolveNativeCategories replaces them with the client's own rows.
 gs.PAGES = {
   {
     id = "video",
@@ -239,6 +240,7 @@ gs.PAGES = {
     frame = "OptionsFrame",
     layout = "list",
     nativeCategories = { 2, 3, 4, 5 },
+    nativeSection = 1,
     menuButton = "GameMenuButtonUIOptions",
     width = 648, height = 520,
     hide = gs.NATIVE_OPTIONS_HIDE,
@@ -249,6 +251,7 @@ gs.PAGES = {
     frame = "OptionsFrame",
     layout = "list",
     nativeCategories = { 7 },
+    nativeSection = 2,
     width = 648, height = 520,
     hide = gs.NATIVE_OPTIONS_HIDE,
   },
@@ -258,6 +261,7 @@ gs.PAGES = {
     frame = "OptionsFrame",
     layout = "list",
     nativeCategories = { 9, 10, 11, 12, 13, 14, 15, 16 },
+    nativeSection = 3,
     width = 648, height = 520,
     hide = gs.NATIVE_OPTIONS_HIDE,
   },
@@ -1022,6 +1026,10 @@ function gs.Attach(page)
     return attached
   end
 
+  if type(U.ResetSettingsWatermark) == "function" then
+    U.ResetSettingsWatermark()
+  end
+
   local frame = gs.Frame(page)
   if not frame then return false end
 
@@ -1072,6 +1080,7 @@ function gs.Attach(page)
     -- The client panel has been shown and laid out once: its leaf categories
     -- can now be read for search (gs.list.SweepNative).
     gs.nativeShown = true
+    gs.ResolveNativeCategories()
     local index = page.nativeSelected or page.nativeCategories[1]
     gs.SelectNativeCategory(page, index, false)
     -- OptionsFrame's category handler restores its native canvas pieces.
@@ -1288,9 +1297,10 @@ function gs.PageVersion(page)
 end
 
 -- Whether the category header carries a logo-aligned label: Panda UI's
--- wordmark row and every sibling addon's category.
+-- wordmark row and every sibling addon's category. The label shares the logo's
+-- vertical centre (0), so name and version sit level with the icon.
 function gs.HeaderLabelY(page)
-  if gs.WORDMARK[page.id] or page.addonCategory then return -3 end
+  if gs.WORDMARK[page.id] or page.addonCategory then return 0 end
   return nil
 end
 
@@ -1666,6 +1676,58 @@ function gs.NativeCategoryName(index)
   return "OptionsFrameCategoryListCategory" .. tostring(index)
 end
 
+-- A clickable leaf row. Header rows (Video, Sound, Interface) have ID 0 and
+-- raise "OptionsFrame.lua:496: attempt to index field '?'" when clicked
+-- (settingsinventory.v2); leaves carry their own row number as ID.
+function gs.IsNativeLeaf(index)
+  local button = U.G(gs.NativeCategoryName(index))
+  if not button then return false end
+  local id = tonumber(gs.Read(button, "GetID"))
+  return id ~= nil and id ~= 0
+end
+
+-- The row numbers differ between client builds (a player's client has an
+-- extra Video leaf, user report 2026-10-26), so the PAGES defaults are
+-- replaced by the rows the client actually lists: each shown ID-0 row opens
+-- a section, and the n-th section with leaves feeds the page whose
+-- nativeSection is n. Retried until the rows are readable.
+function gs.ResolveNativeCategories()
+  if gs.nativeResolved then return end
+  local sections, current = {}, nil
+  local i = 1
+  while i <= 64 do
+    local button = U.G(gs.NativeCategoryName(i))
+    if not button then break end
+    if gs.Read(button, "IsShown") then
+      local id = tonumber(gs.Read(button, "GetID"))
+      if id == 0 then
+        current = {}
+        table.insert(sections, current)
+      elseif id and current then
+        table.insert(current, i)
+      end
+    end
+    i = i + 1
+  end
+  local filled = {}
+  for i = 1, table.getn(sections) do
+    if table.getn(sections[i]) > 0 then table.insert(filled, sections[i]) end
+  end
+  if table.getn(filled) < 3 then return end
+  for i = 1, table.getn(gs.PAGES) do
+    local page = gs.PAGES[i]
+    local list = page.nativeSection and filled[page.nativeSection]
+    if list then
+      page.nativeCategories = list
+      if page.nativeSelected and not gs.NativeCategoryIndex(page,
+           gs.NativeCategoryName(page.nativeSelected)) then
+        page.nativeSelected = nil
+      end
+    end
+  end
+  gs.nativeResolved = true
+end
+
 function gs.NativeCategoryIndex(page, name)
   if not page or type(page.nativeCategories) ~= "table" then return nil end
   local i
@@ -1677,8 +1739,10 @@ function gs.NativeCategoryIndex(page, name)
 end
 
 function gs.SelectNativeCategory(page, index, refresh)
+  gs.ResolveNativeCategories()
   local name = gs.NativeCategoryName(index)
   if not gs.NativeCategoryIndex(page, name) then return false end
+  if not gs.IsNativeLeaf(index) then return false end
   local button = U.G(name)
   if not button or type(button.Click) ~= "function" then return false end
 
@@ -1709,6 +1773,7 @@ function gs.PageTabs(page)
   if not page or not page.frame then return tabs end
 
   if type(page.nativeCategories) == "table" then
+    gs.ResolveNativeCategories()
     local selected = page.nativeSelected or page.nativeCategories[1]
     local i
     for i = 1, table.getn(page.nativeCategories) do
@@ -1716,7 +1781,7 @@ function gs.PageTabs(page)
       local name = gs.NativeCategoryName(index)
       local button = U.G(name)
       local label = button and gs.Read(button, "GetText")
-      if type(label) == "string" and label ~= "" then
+      if type(label) == "string" and label ~= "" and gs.IsNativeLeaf(index) then
         table.insert(tabs, {
           name = name,
           label = label,

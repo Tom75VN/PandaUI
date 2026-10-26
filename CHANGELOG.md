@@ -4,6 +4,38 @@ Player-visible PandaUI changes, newest first. Keep every bullet short, clear and
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-10-26
+
+### Added
+
+- New option to show or hide the target-of-target frame, in the Unit Frames settings and its edit mode panel.
+- Font size of the health and power bar text on unit frames can be chosen, in the Unit Frames settings and the edit mode panels.
+- Health and power text on unit frames can be limited to when the cursor is over the frame.
+- Power text can be set per side (default, hidden, percentage or value), in the Unit Frames settings and the unit frame edit mode panels.
+- The pet frame has its own 2D/3D portrait option, in the Unit Frames settings and its edit mode panel.
+- Classic-wow and modern-wow action bars have a "Slot background" option showing the Bar 1 slot plate, in ActionBars settings and edit mode.
+- Classic-wow and modern-wow party frames can look like raid frames, in one column with a 30% taller power bar, in Party Frames settings and edit mode.
+- Party frames have one icon size option in percent for buffs, debuffs and HoTs, raid-style included, on top of the mover scale.
+
+### Changed
+
+- The raid frame icon size option now sizes debuffs and dispel icons as well as HoTs.
+- The action bar "Hide Slot Background" option is now "Slot border" (ticked shows the border); the edit mode bar panel drops its keybind hint.
+- Addon settings categories can now provide their own mascot watermark.
+- The settings pages show a new panda in the bottom-right corner.
+- The modern-wow target nameplate cast bar now uses the Retail look, with spark and icon inside.
+- The modern-wow pet frame text is now smaller and stays inside its bars.
+- Closing an anchor's settings panel in edit mode keeps the anchor selected; click it to reopen the panel.
+- The Tracked Bars edit mode "Size" slider is now "Scale (%)", like the other anchors; your size is kept.
+
+### Fixed
+
+- Paladins get their aura bar back, as a movable stance bar in every theme.
+- Addon names and versions in the Game Settings category list now line up vertically with their icons.
+- The player mana and energy tick now runs to the end of the bar at any frame scale.
+- Opening Sound or Interface in Game Settings no longer shows an OptionsFrame.lua:496 error on some client versions.
+- The durability readout and the damaged-armour figure now update as soon as gear is damaged.
+
 ## [0.12.0] - 2026-10-26
 
 ### Added

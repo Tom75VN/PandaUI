@@ -115,7 +115,7 @@ Use `/pui` to open the settings, `/pui unlock` to arrange supported elements, `/
 
 ## Version
 
-Current release: **0.12.0**
+Current release: **0.12.1**
 
 [See what changed](CHANGELOG.md).
 

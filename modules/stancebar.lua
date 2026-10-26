@@ -13,7 +13,10 @@
 -- (octo-framexml BonusActionBarFrame.xml:209), which modules/actionbar.lua
 -- suppresses outside native-main-bar Classic -- without this bar a Druid would
 -- lose the form buttons the stock client gives them (knowledge.json /
--- actionbars.druid_shapeshift_bar_hidden_with_mainmenubar). For every other
+-- actionbars.druid_shapeshift_bar_hidden_with_mainmenubar). Paladin is here for
+-- the same reason: the Turtle-derived client lists paladin auras as shapeshift
+-- forms, so the stock UI gives them an aura bar (same record,
+-- paladinCorrection). For every other
 -- class this module creates nothing, suppresses nothing and registers no
 -- mover, so the client's own shapeshift bar is left exactly as it is.
 --
@@ -87,6 +90,7 @@ local SUPPORTED_CLASSES = {
   WARRIOR = 3, -- Battle / Defensive / Berserker Stance
   ROGUE   = 1, -- Stealth
   DRUID   = 5, -- Bear / Aquatic / Cat / Travel / Moonkin or Tree of Life
+  PALADIN = 7, -- auras: Devotion / Retribution / Concentration / 3 resistances / Sanctity
 }
 
 local COLOR = {

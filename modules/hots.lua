@@ -111,16 +111,20 @@ local H = U.RegisterModule("hots")
 -- ---------------------------------------------------------------------------
 local CONFIG = "hots"
 
+-- The icon size follows the party aura icon size (modules/auras.lua
+-- partyIconSize, a percent of BASE_SIZE; user request, 2026-10-26): one slider
+-- sizes the party buffs, debuffs and HoTs together. The icons are children of
+-- the scaled party mover, so 120 is 20 % larger than at the current scale.
+local BASE_SIZE = 14
+
 local defaults = {
   enabled = true,
   corner  = "TOPLEFT",
-  size    = 14,
   spacing = 2,
 }
 
 -- Shared with the settings page so the slider and the clamp cannot disagree.
 local LIMITS = {
-  size    = { min = 10, max = 28, step = 1 },
   spacing = { min = 0,  max = 10, step = 1 },
 }
 
@@ -144,6 +148,13 @@ function U.GetHotSetting(key)
   local value = Config()[key]
   if value == nil then return defaults[key] end
   return value
+end
+
+-- The icon's edge in the party row's own units.
+local function IconSize()
+  local percent = type(U.GetAuraSetting) == "function" and
+                  tonumber(U.GetAuraSetting("partyIconSize")) or 100
+  return BASE_SIZE * (percent or 100) / 100
 end
 
 function U.HotLimits(key)
@@ -515,7 +526,7 @@ end
 local units = {}          -- unit token -> { anchor, frame, icons }
 
 local function CreateIcon(holder, index)
-  local size = U.GetHotSetting("size")
+  local size = IconSize()
 
   local icon = CreateFrame("Frame", "PandaUIHot" .. holder.unit .. index,
                            holder.frame)
@@ -646,7 +657,7 @@ local function PlaceAtCorner(holder, object, slot, size, spacing)
 end
 
 local function PlaceIcon(holder, icon, slot)
-  local size = U.GetHotSetting("size")
+  local size = IconSize()
   PlaceAtCorner(holder, icon, slot, size, U.GetHotSetting("spacing"))
   -- The overlay carries its own size for the reason CreateIcon states, so it
   -- has to be re-sized here rather than following the icon through an anchor.
@@ -680,7 +691,7 @@ local function SampleWanted()
 end
 
 local function PlaceSample(holder, cell, slot)
-  local size = U.GetHotSetting("size")
+  local size = IconSize()
   PlaceAtCorner(holder, cell, slot, size, U.GetHotSetting("spacing"))
 end
 
@@ -832,6 +843,9 @@ end
 local function CollectLive(unit, out)
   local i
   for i = table.getn(out), 1, -1 do out[i] = nil end
+  -- table.insert stores the length (Lua 5.0 table.setn); nil-ing the
+  -- entries does not reset it (knowledge.json / lua50.getn_stale_after_nil_clear).
+  if table.setn then table.setn(out, 0) end
 
   local now = Now()
   -- Inside the window the unit is read even with nothing stamped, because that
@@ -907,6 +921,9 @@ function U.HotLiveOn(unit, out)
   if not Tracking() or not Call("UnitExists", unit) then
     local i
     for i = table.getn(out), 1, -1 do out[i] = nil end
+    -- table.insert stores the length (Lua 5.0 table.setn); nil-ing the
+    -- entries does not reset it (knowledge.json / lua50.getn_stale_after_nil_clear).
+    if table.setn then table.setn(out, 0) end
     return 0
   end
   return CollectLive(unit, out)
@@ -1102,7 +1119,7 @@ function U.HotDebugDump()
   U.Print("pandaUI HoT indicators")
   U.Print("  enabled: " .. tostring(U.GetHotSetting("enabled")) ..
           "  corner: " .. tostring(U.GetHotSetting("corner")) ..
-          "  size: " .. tostring(U.GetHotSetting("size")) ..
+          "  size: " .. tostring(IconSize()) ..
           "  spacing: " .. tostring(U.GetHotSetting("spacing")))
 
   local spells = U.HotSpells()
@@ -1225,9 +1242,9 @@ end
 local SETTINGS_COLUMN_X = U.SETTINGS_COLUMN_X
 local SETTINGS_SLIDER_WIDTH = 200
 
+-- No size slider: the Party Frames icon size above sizes the HoTs too.
 local SLIDERS = {
-  { key = "size",    textKey = "HOTS_SIZE",    column = 0 },
-  { key = "spacing", textKey = "HOTS_SPACING", column = 1 },
+  { key = "spacing", textKey = "HOTS_SPACING", column = 0 },
 }
 
 function U.BuildHotSettings(parent, y, width)

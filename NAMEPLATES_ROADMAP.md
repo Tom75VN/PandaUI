@@ -27,7 +27,7 @@ they show in `knowledge.json` (record
 | Reaction from the bundled VMaNGOS faction table (`Database/unit_reactions.lua`) | Native bar tint (`GetStatusBarColor`, pfUI-octo's route), then the name learned from the target or mouseover, then the player cache | Octo's plate is the stock 1.12 plate with a tinted health bar. Unreal's has neither. The table was not ported. |
 | `PLATE_LIFT`, invisible `NAMEPLATE_FONT`, every-frame `WatchPlates`, `MuteNativePlate` on every pass | Not ported | Unreal flicker workarounds. |
 | Modern WoW `backgroundWindow` mapping (`style.LayoutArt`) | pandaUI's own `backgroundInset` anchoring, kept | Octo's art is repacked (client-safe sheet, padded `nameplate-selected`). |
-| Modern WoW cast art, spell icon, `/uui npcast` preview | Not ported | Not part of the ShaguPlates option set. `U.TargetCastInfo` returns no icon here. |
+| Modern WoW cast art, spell icon, `/uui npcast` preview | Retail-look target cast bar with spark and icon inside (2026-10-26, untested); no `npcast` preview | Icon placement: `style.LayoutCastIcon`. |
 | Level-size slider disabled | Kept disabled | Unreal user report. Unverified on Octo. Re-enable once tested. |
 
 ## Phase 0: Foundation

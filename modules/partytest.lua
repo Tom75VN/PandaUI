@@ -351,6 +351,9 @@ function U.PartyTestHots(unit, out)
   if not m then return nil end
   local i
   for i = table.getn(out), 1, -1 do out[i] = nil end
+  -- table.insert stores the length (Lua 5.0 table.setn); nil-ing the
+  -- entries does not reset it (knowledge.json / lua50.getn_stale_after_nil_clear).
+  if table.setn then table.setn(out, 0) end
   if not Alive(m) or not m.visible then return 0 end
   local now = Now()
   for i = 1, table.getn(m.hots) do

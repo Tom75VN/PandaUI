@@ -31,7 +31,8 @@
 --     design"): no theme branch anywhere in this file or its settings page,
 --     every value from M.raidFrame. The art only lives in
 --     media/Textures/modern-wow/raid/. Party rows (modules/unitframes.lua) are untouched and
---     keep drawing in a raid, by request.
+--     keep drawing in a raid, by request, unless the Party Frames option
+--     draws the party block with these cells (see "Party block" below).
 --   * No role icon, aggro highlight, ready check, absorbs or private auras:
 --     1.12 has no roles, no threat API, no absorb API and no private auras.
 --     Their art is not imported.
@@ -93,6 +94,10 @@ local defaults = {
   -- 100 %). Forever's Display Buffs is showHots above: the buffs this client
   -- can attribute to the player are the player's own HoTs.
   auraOrganization = "legacy",
+  -- One size for every icon in the cell -- HoTs, debuffs and dispel-type
+  -- icons (user request, 2026-10-26), in percent of their M.raidFrame size.
+  -- Cells are children of a scaled mover, so 120 is 20 % larger than the
+  -- icon at the current mover scale.
   buffIconSize = 100,
 }
 
@@ -171,6 +176,9 @@ end
 local fnCache = {}
 
 local function Fn(name)
+  -- "/pui party test" fake party (modules/partytest.lua); nil in normal play.
+  local override = U.gOverride
+  if override and override[name] then return override[name] end
   local cached = fnCache[name]
   if cached == nil then
     local value = U.G(name)
@@ -215,6 +223,10 @@ local DEBUFF_SLOTS = 16
 local rf = {
   root = nil,
   cells = {},          -- index -> cell
+  -- The party block drawn with raid cells (Party Frames option, user request
+  -- 2026-10-26): its own pool, parented to the party mover's anchor.
+  party = { root = nil, cells = {}, count = 0, shape = nil },
+  active = {},         -- cells in use, raid first then party: 1..shown
   groups = {},         -- group number -> group frame
   byUnit = {},         -- unit token -> cell currently showing it
   shown = 0,           -- cells in use
@@ -228,6 +240,7 @@ local rf = {
   -- Current cell geometry from the settings; stamp moves on every change so
   -- each cell re-sizes once (SizeCell).
   geo = { stamp = 0 },
+  partyGeo = { stamp = 0 },  -- the same for the raid-style party column
 }
 
 local function Setting(key)
@@ -238,25 +251,53 @@ local function Setting(key)
   return value
 end
 
+-- One geometry table per cell pool. Both share the cell size and aura
+-- layout; their icon scale differs: the raid's own Aura icon size, and for
+-- the raid-style party column the Party Frames icon size (modules/auras.lua
+-- partyIconSize, user request 2026-10-26), so the party slider sizes the
+-- party's icons whichever style draws them.
+local function FillGeometry(geo, width, health, power, org, scale)
+  if geo.width ~= width or geo.health ~= health or geo.power ~= power or
+     geo.org ~= org or geo.scale ~= scale then
+    geo.width, geo.health, geo.power = width, health, power
+    geo.org, geo.scale = org, scale
+    geo.buffSize = R.auraSize * scale
+    geo.debuffSize = R.auraSize * scale
+    geo.dispelSize = R.dispelIconSize * scale
+    geo.layout = R.organization[org]
+    geo.height = R.inset * 2 + health +
+                 (power > 0 and power + R.powerGap or 0)
+    geo.stamp = geo.stamp + 1
+  end
+end
+
+local PARTY_POWER_SCALE = 1.3
+
+local function PartyIconScale()
+  local value = type(U.GetAuraSetting) == "function" and
+                tonumber(U.GetAuraSetting("partyIconSize")) or nil
+  local limit = LIMITS.buffIconSize
+  if not value then return 1 end
+  if value < limit.min then value = limit.min end
+  if value > limit.max then value = limit.max end
+  return value / 100
+end
+
 local function Geometry()
-  local geo = rf.geo
   local width = Setting("width")
   local health = Setting("healthHeight")
   local power = U.GetRaidFrameSetting("showPower") and Setting("powerHeight")
                 or 0
   local org = U.GetRaidFrameSetting("auraOrganization")
   if not R.organization[org] then org = defaults.auraOrganization end
-  local buffSize = R.auraSize * Setting("buffIconSize") / 100
-  if geo.width ~= width or geo.health ~= health or geo.power ~= power or
-     geo.org ~= org or geo.buffSize ~= buffSize then
-    geo.width, geo.health, geo.power = width, health, power
-    geo.org, geo.buffSize = org, buffSize
-    geo.layout = R.organization[org]
-    geo.height = R.inset * 2 + health +
-                 (power > 0 and power + R.powerGap or 0)
-    geo.stamp = geo.stamp + 1
-  end
-  return geo
+  FillGeometry(rf.geo, width, health, power, org,
+               Setting("buffIconSize") / 100)
+  -- The party column's power strip is 30 % taller (user request,
+  -- 2026-10-26); its cells grow to hold it.
+  local partyPower = power > 0 and
+                     math.floor(power * PARTY_POWER_SCALE + 0.5) or 0
+  FillGeometry(rf.partyGeo, width, health, partyPower, org, PartyIconScale())
+  return rf.geo
 end
 
 -- ---------------------------------------------------------------------------
@@ -398,7 +439,7 @@ end
 -- are set explicitly rather than through anchors, and the shared bars are
 -- re-measured because a resize alone does not move their fill.
 local function SizeCell(cell)
-  local geo = rf.geo
+  local geo = cell.geo or rf.geo
   if cell.geoStamp == geo.stamp then return end
   cell.geoStamp = geo.stamp
 
@@ -462,6 +503,14 @@ local function SizeCell(cell)
     slot:SetWidth(geo.buffSize)
     slot:SetHeight(geo.buffSize)
     U.SizeRadialWipe(slot.wipe, geo.buffSize)
+  end
+  for i = 1, table.getn(cell.debuffSlots) do
+    cell.debuffSlots[i]:SetWidth(geo.debuffSize)
+    cell.debuffSlots[i]:SetHeight(geo.debuffSize)
+  end
+  for i = 1, table.getn(cell.dispelIcons) do
+    cell.dispelIcons[i]:SetWidth(geo.dispelSize)
+    cell.dispelIcons[i]:SetHeight(geo.dispelSize)
   end
   if cell.status then
     cell.status:SetWidth(geo.width - 6)
@@ -536,8 +585,9 @@ local function BuildOverlay(cell)
   end
 end
 
-local function BuildCell(index)
-  local cell = CreateFrame("Button", "PandaUIRaidCell" .. index, rf.root)
+local function BuildCell(index, pool, parent, prefix, geo)
+  local cell = CreateFrame("Button", prefix .. index, parent)
+  cell.geo = geo
   cell:SetWidth(1)
   cell:SetHeight(1)
 
@@ -554,12 +604,20 @@ local function BuildCell(index)
 
   cell.index = index
   cell:Hide()
-  rf.cells[index] = cell
+  pool[index] = cell
   return cell
 end
 
 local function Cell(index)
-  return rf.cells[index] or BuildCell(index)
+  return rf.cells[index] or
+         BuildCell(index, rf.cells, rf.root, "PandaUIRaidCell", rf.geo)
+end
+
+local function PartyCell(index)
+  local party = rf.party
+  return party.cells[index] or
+         BuildCell(index, party.cells, party.root, "PandaUIPartyRaidCell",
+                   rf.partyGeo)
 end
 
 local function BuildGroup(number)
@@ -616,8 +674,13 @@ local function MenuDropDown()
   pcall(init, dropdown, function()
     local show = Fn("UnitPopup_ShowMenu")
     if not show or not dropdown.unit then return end
-    local which = Call("UnitIsUnit", dropdown.unit, "player") and "SELF" or
-                  "RAID"
+    local which = "RAID"
+    if Call("UnitIsUnit", dropdown.unit, "player") then
+      which = "SELF"
+    elseif string.find(dropdown.unit, "^party%d") then
+      -- A party cell gets the menu the party rows open.
+      which = "PARTY"
+    end
     pcall(show, dropdown, which, dropdown.unit, dropdown.name, dropdown.id)
   end, "MENU")
 
@@ -667,7 +730,7 @@ end
 function U.ApplyRaidHealPrediction()
   if not rf.running then return end
   local i
-  for i = 1, rf.shown do PaintPrediction(rf.cells[i]) end
+  for i = 1, rf.shown do PaintPrediction(rf.active[i]) end
 end
 
 -- What one cell shows, from the client or, in /pui raid test, from the cell's
@@ -797,7 +860,7 @@ local function PlaceAura(cell, frame, index, spec, size, inset)
   local x = spec.x + spec.dx * (inset + column * size)
   local y
   if spec.bottom then
-    y = R.auraBottom + (cell.powerShown and rf.geo.power + R.powerGap or 0) +
+    y = R.auraBottom + (cell.powerShown and cell.geo.power + R.powerGap or 0) +
         inset + row * size
   else
     y = spec.y - inset - row * size
@@ -850,13 +913,23 @@ local function Indicated(school, mine, mode)
   return true
 end
 
+-- A generated member: /pui raid test (cell.fake) or a "/pui party test" party
+-- member shown by the raid-style party column (modules/partytest.lua).
+local function TestCell(cell)
+  if cell.fake then return true end
+  return U.partyTest and type(cell.unit) == "string" and
+         string.find(cell.unit, "^party%d") and true or false
+end
+
 -- Driven by every debuff on the unit, not only the ones shown as icons, as
 -- Forever keeps its dispel list apart from the debuff frames.
 local function PaintDispel(cell, debuffs, count)
   local mine = MySchools()
-  -- /pui raid test always shows every school (user request, 2026-10-21):
-  -- under "mine" a class would never see the schools it cannot remove.
-  local mode = cell.fake and "all" or U.GetRaidFrameSetting("dispelIndicator")
+  -- Both tests always show every school (user requests, 2026-10-21 and
+  -- 2026-10-26): under "mine" a class would never see the schools it cannot
+  -- remove.
+  local mode = TestCell(cell) and "all" or
+               U.GetRaidFrameSetting("dispelIndicator")
   -- The overlay takes the school the player can remove first, then any.
   local overlay, i
   for i = 1, count do
@@ -903,7 +976,7 @@ local function PaintDispel(cell, debuffs, count)
       flagged[school] = true
       local icon = cell.dispelIcons[shown]
       SetCoord(icon, R.coord.dispelIcon[school])
-      PlaceAura(cell, icon, shown, rf.geo.layout.dispel, R.dispelIconSize, 0)
+      PlaceAura(cell, icon, shown, cell.geo.layout.dispel, cell.geo.dispelSize, 0)
       icon:Show()
     end
   end
@@ -937,7 +1010,9 @@ local function PaintDebuffs(cell)
   -- the first rank is shown (Forever's displayOnlyDispellableDebuffs, minus
   -- the boss debuffs it also keeps: this client cannot tell them apart).
   local mine = MySchools()
-  local onlyMine = U.GetRaidFrameSetting("onlyDispellable")
+  -- A test member shows every debuff it rolled, whatever the player's class.
+  local onlyMine = U.GetRaidFrameSetting("onlyDispellable") and
+                   not TestCell(cell)
   local ordered = rf.ordered
   local n, i, rank = 0, nil, nil
   for rank = 1, onlyMine and 1 or 3 do
@@ -966,10 +1041,10 @@ local function PaintDebuffs(cell)
     local data = ordered[i]
     local slot = cell.debuffSlots[shown]
     if not slot then
-      slot = NewAuraSlot(cell, true, R.auraSize)
+      slot = NewAuraSlot(cell, true, cell.geo.debuffSize)
       cell.debuffSlots[shown] = slot
     end
-    PlaceAura(cell, slot, shown, rf.geo.layout.debuffs, R.auraSize,
+    PlaceAura(cell, slot, shown, cell.geo.layout.debuffs, cell.geo.debuffSize,
               cell.auraOffset)
     slot.icon:SetTexture(data.texture)
     U.SetColor(slot.border, M.Unpack(R.debuffColor[data.school] or
@@ -990,11 +1065,19 @@ end
 local function PaintHots(cell)
   local live = rf.hots
   local found = 0
+  local testHots = nil
+  if U.partyTest and type(U.PartyTestHots) == "function" and
+     U.GetRaidFrameSetting("showHots") then
+    -- "/pui party test" members carry their own HoTs; nil for a real unit.
+    testHots = U.PartyTestHots(cell.unit, live)
+  end
   if cell.fake then
     if U.GetRaidFrameSetting("showHots") then
       live = cell.fake.hots
       found = table.getn(live)
     end
+  elseif testHots then
+    found = testHots
   elseif U.GetRaidFrameSetting("showHots") and
          type(U.HotLiveOn) == "function" and
          not (U.PerfDisabled and U.PerfDisabled("hots")) then
@@ -1010,10 +1093,10 @@ local function PaintHots(cell)
     local item = live[i]
     local slot = cell.buffs[shown]
     if not slot then
-      slot = NewAuraSlot(cell, false, rf.geo.buffSize)
+      slot = NewAuraSlot(cell, false, cell.geo.buffSize)
       cell.buffs[shown] = slot
     end
-    PlaceAura(cell, slot, shown, rf.geo.layout.buffs, rf.geo.buffSize,
+    PlaceAura(cell, slot, shown, cell.geo.layout.buffs, cell.geo.buffSize,
               cell.auraOffset or 0)
     slot.icon:SetTexture(item.entry.texture)
     if slot.count then
@@ -1041,7 +1124,7 @@ local function TickWipes()
   local now = Now()
   local index
   for index = 1, rf.shown do
-    local cell = rf.cells[index]
+    local cell = rf.active[index]
     if cell and cell.hotActive then
       local i
       for i = 1, table.getn(cell.buffs) do
@@ -1116,15 +1199,34 @@ local function GroupMetrics()
   }
 end
 
+-- Puts one cell in use for one roster entry. A preview entry paints the
+-- player and owns no unit token, so events never route to it.
+local function Assign(cell, entry, preview)
+  cell.unit = entry.unit
+  cell.raidIndex = entry.raidIndex
+  cell.fake = entry.fake
+  cell:Show()
+  SizeCell(cell)
+  cell.nameText = nil
+  if not preview and not entry.preview then rf.byUnit[cell.unit] = cell end
+  rf.shown = rf.shown + 1
+  rf.active[rf.shown] = cell
+end
+
+local function HidePool(pool, from)
+  local i
+  for i = from, table.getn(pool) do
+    pool[i].unit = nil
+    pool[i]:Hide()
+  end
+end
+
 local function Layout(members)
   local x, used, cellIndex = 0, 0, 0
   local metrics = GroupMetrics()
   local geo = Geometry()
   local tallest = 0
   local g
-
-  local key
-  for key in pairs(rf.byUnit) do rf.byUnit[key] = nil end
 
   for g = 1, GROUP_COUNT do
     local list = members[g]
@@ -1159,16 +1261,10 @@ local function Layout(members)
       for m = 1, count do
         cellIndex = cellIndex + 1
         local cell = Cell(cellIndex)
-        cell.unit = list[m].unit
-        cell.raidIndex = list[m].raidIndex
-        cell.fake = list[m].fake
         cell:ClearAllPoints()
         cell:SetPoint("TOPLEFT", group, "TOPLEFT", 0,
                       -metrics.title - (m - 1) * geo.height)
-        cell:Show()
-        SizeCell(cell)
-        cell.nameText = nil
-        if not rf.preview then rf.byUnit[cell.unit] = cell end
+        Assign(cell, list[m], rf.preview)
       end
 
       x = x + metrics.left + geo.width + metrics.right + metrics.gap
@@ -1180,13 +1276,7 @@ local function Layout(members)
     end
   end
 
-  local i
-  for i = cellIndex + 1, table.getn(rf.cells) do
-    local cell = rf.cells[i]
-    cell.unit = nil
-    cell:Hide()
-  end
-  rf.shown = cellIndex
+  HidePool(rf.cells, cellIndex + 1)
 
   -- With nobody to show the root keeps a full 40-member footprint, so the
   -- mover has something to place outside a raid.
@@ -1198,10 +1288,139 @@ local function Layout(members)
   rf.root:SetHeight(tallest > 0 and tallest or 1)
 end
 
+-- ---------------------------------------------------------------------------
+-- Party block as raid cells (Party Frames option "Raid-style party frames",
+-- user request 2026-10-26). The same cells, settings and aura layout as the
+-- raid, stacked in one vertical column on the party mover's anchor. The
+-- party rows (modules/unitframes.lua) hide while it is on and size the anchor
+-- from U.RaidPartyFootprint. Pets are not drawn: raid cells have none.
+-- ---------------------------------------------------------------------------
+local PARTY_MEMBERS = 4
+
+local function PartyStyle()
+  return type(U.PartyRaidStyleActive) == "function" and
+         U.PartyRaidStyleActive() and true or false
+end
+
+local function Unlocked()
+  return type(U.IsUnlocked) == "function" and U.IsUnlocked() and true or false
+end
+
+-- Same occupancy test the party rows use: GetPartyMember keeps a member
+-- through a zone transition where UnitExists briefly fails.
+local function PartyMemberPresent(index)
+  if Call("UnitExists", "party" .. index) then return true end
+  return Call("GetPartyMember", index) and true or false
+end
+
+local function PartyPlayerWanted()
+  return type(U.GetUnitFramePartySetting) == "function" and
+         U.GetUnitFramePartySetting("partyPlayer") and true or false
+end
+
+-- Polled every tick: PARTY_MEMBERS_CHANGED was never observed on this client
+-- (modules/unitframes.lua header), so the roster cannot wait for it.
+local function PartyShape()
+  local shape = (Unlocked() and "U" or "-") ..
+                (PartyPlayerWanted() and "P" or "-")
+  local i
+  for i = 1, PARTY_MEMBERS do
+    shape = shape .. (PartyMemberPresent(i) and "1" or "0")
+  end
+  return shape
+end
+
+-- Player first when the Party Frames option shows yourself, then party1-4.
+-- In edit mode an empty slot previews the player, so the column dragged into
+-- place is the tallest it can become.
+local function ReadPartyRoster()
+  local list, grouped, unlocked = {}, false, Unlocked()
+  local present = {}
+  local i
+  for i = 1, PARTY_MEMBERS do
+    present[i] = PartyMemberPresent(i)
+    if present[i] then grouped = true end
+  end
+  if PartyPlayerWanted() and (grouped or unlocked) then
+    table.insert(list, { unit = "player" })
+  end
+  for i = 1, PARTY_MEMBERS do
+    if present[i] then
+      -- raidIndex is the dropdown id; the PARTY popup takes the party index.
+      table.insert(list, { unit = "party" .. i, raidIndex = i })
+    elseif unlocked then
+      table.insert(list, { unit = "player", preview = true })
+    end
+  end
+  return list
+end
+
+local function PartyRoot()
+  local party = rf.party
+  if party.root then return party.root end
+  local anchor = type(U.PartyAnchorFrame) == "function" and
+                 U.PartyAnchorFrame() or nil
+  if not anchor then return nil end
+  party.root = CreateFrame("Frame", "PandaUIPartyRaid", anchor)
+  party.root:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, 0)
+  party.root:SetWidth(1)
+  party.root:SetHeight(1)
+  return party.root
+end
+
+local function LayoutParty()
+  local party = rf.party
+  party.shape = nil
+  if not PartyStyle() then
+    party.count = 0
+    HidePool(party.cells, 1)
+    if party.root then party.root:Hide() end
+    return
+  end
+
+  local root = PartyRoot()
+  if not root then
+    -- The party anchor is built by modules/unitframes.lua; try next tick.
+    rf.rosterDirty = true
+    return
+  end
+
+  party.shape = PartyShape()
+  Geometry()
+  local geo = rf.partyGeo
+  local list = ReadPartyRoster()
+  local count = table.getn(list)
+  local m
+  for m = 1, count do
+    local cell = PartyCell(m)
+    cell:ClearAllPoints()
+    cell:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -(m - 1) * geo.height)
+    Assign(cell, list[m])
+  end
+  HidePool(party.cells, count + 1)
+  party.count = count
+  root:SetWidth(geo.width)
+  root:SetHeight((count > 0 and count or 1) * geo.height)
+  root:Show()
+
+  if type(U.RelayoutPartyBlock) == "function" then U.RelayoutPartyBlock() end
+end
+
+-- The party anchor's size while the raid-style column replaces the rows, in
+-- the anchor's own units (the cells are its children). nil when it is off.
+function U.RaidPartyFootprint()
+  if not rf.running or not rf.party.root or not PartyStyle() then return nil end
+  Geometry()
+  local geo = rf.partyGeo
+  local count = rf.party.count
+  if count < 1 then count = PARTY_MEMBERS + 1 end
+  return geo.width, count * geo.height
+end
+
 local function PaintAll()
   local i
   for i = 1, rf.shown do
-    local cell = rf.cells[i]
+    local cell = rf.active[i]
     PaintVitals(cell)
     PaintSelection(cell)
     PaintAuras(cell)
@@ -1210,12 +1429,21 @@ end
 
 local function RefreshRoster()
   rf.rosterDirty = false
-  if not Enabled() then
+  local key
+  for key in pairs(rf.byUnit) do rf.byUnit[key] = nil end
+  rf.shown = 0
+
+  if Enabled() then
+    Layout(ReadRoster())
+    rf.root:Show()
+  else
+    HidePool(rf.cells, 1)
     if rf.root then rf.root:Hide() end
-    return
   end
-  Layout(ReadRoster())
-  rf.root:Show()
+  LayoutParty()
+
+  local i
+  for i = table.getn(rf.active), rf.shown + 1, -1 do rf.active[i] = nil end
   PaintAll()
 end
 
@@ -1246,12 +1474,16 @@ local function CellFor(unit)
 end
 
 local function Tick()
+  if not rf.rosterDirty and PartyStyle() and
+     PartyShape() ~= rf.party.shape then
+    rf.rosterDirty = true
+  end
   if rf.rosterDirty then RefreshRoster() end
-  if not Enabled() or rf.shown == 0 then return end
+  if rf.shown == 0 then return end
 
   local i
   for i = 1, rf.shown do
-    local cell = rf.cells[i]
+    local cell = rf.active[i]
     if cell.vitalsDirty then
       cell.vitalsDirty = nil
       PaintVitals(cell)
@@ -1264,7 +1496,7 @@ local function Tick()
 
   for i = 1, AURAS_PER_TICK do
     if rf.auraCursor > rf.shown then rf.auraCursor = 1 end
-    local cell = rf.cells[rf.auraCursor]
+    local cell = rf.active[rf.auraCursor]
     rf.auraCursor = rf.auraCursor + 1
     if cell then
       PaintVitals(cell)
@@ -1516,7 +1748,7 @@ local function RegisterEventsOnce()
   U.RegisterEvent("PLAYER_TARGET_CHANGED", function()
     if not rf.running then return end
     local index
-    for index = 1, rf.shown do PaintSelection(rf.cells[index]) end
+    for index = 1, rf.shown do PaintSelection(rf.active[index]) end
   end)
 end
 
@@ -1557,19 +1789,29 @@ local function Stop()
 
   local key
   for key in pairs(rf.byUnit) do rf.byUnit[key] = nil end
+  HidePool(rf.cells, 1)
+  HidePool(rf.party.cells, 1)
   local i
-  for i = 1, table.getn(rf.cells) do
-    rf.cells[i].unit = nil
-    rf.cells[i]:Hide()
-  end
+  for i = table.getn(rf.active), 1, -1 do rf.active[i] = nil end
   rf.shown = 0
+  rf.party.count = 0
+  rf.party.shape = nil
   if rf.root then rf.root:Hide() end
+  if rf.party.root then rf.party.root:Hide() end
 end
 
--- Follows the Enable setting, under every theme.
+-- Follows the Enable setting, under every theme, and the Party Frames
+-- raid-style option, which needs the same ticker without the raid itself.
 local function ApplyEnabled()
   if not rf.ready then return end
-  if Enabled() then Start() else Stop() end
+  if Enabled() or PartyStyle() then Start() else Stop() end
+end
+
+-- Called by modules/unitframes.lua when the raid-style party option changes.
+function U.ApplyRaidPartyStyle()
+  rf.rosterDirty = true
+  ApplyEnabled()
+  if rf.running then RefreshRoster() end
 end
 
 function RF:OnEnable()

@@ -1053,6 +1053,15 @@ end
 function style.LayoutCastIcon(overlay, healthHeight)
   local icon = overlay.castIcon
   if not icon then return end
+  if overlay.castArt then
+    -- Modern WoW: inside the cast bar, the bar's full height.
+    local size = overlay.cast:GetHeight() or 0
+    icon:SetWidth(size)
+    icon:SetHeight(size)
+    icon:ClearAllPoints()
+    icon:SetPoint("TOPLEFT", overlay.cast, "TOPLEFT", 0, 0)
+    return
+  end
   local size = healthHeight + overlay.castGap + (overlay.cast:GetHeight() or 0)
   icon:SetWidth(size)
   icon:SetHeight(size)
@@ -1103,7 +1112,10 @@ function style.Layout(overlay)
   end
 
   overlay.cast:SetWidth(plateWidth)
-  if overlay.castName then overlay.castName:SetWidth(plateWidth - 42) end
+  if overlay.castName then
+    overlay.castName:SetWidth(plateWidth - (overlay.castArt and
+                              overlay.castTextX + 30 or 42))
+  end
   style.LayoutRaidIcon(overlay)
   style.LayoutCastIcon(overlay, healthHeight)
   style.LayoutCombo(overlay)
@@ -1487,51 +1499,79 @@ local function BuildOverlay(frame, parts)
   end
 
   -- The target's cast, mirrored from modules/castbar.lua's target tracker.
+  -- Under `modern-wow` it is UnrealUI's Retail nameplate cast bar
+  -- (M.modernWow.nameplate.cast): the Modern WoW cast background and fill,
+  -- an additive spark on the fill's edge, and the icon inside the bar.
+  local castArt = art and art.cast or nil
+  overlay.castArt = castArt
+  local castHeight = castArt and castArt.height * artScale or 12
   local cast = U.CreateStatusBar(overlay, {
     width = plateWidth,
-    height = modernWow and 9 or 12,
-    color = M.color.cast,
-    background = M.color.healthBg,
-    texture = modern and M.unitFrame.statusTexture or nativeTexture,
+    height = castHeight,
+    color = castArt and { 1, 1, 1, 1 } or M.color.cast,
+    background = castArt and { 1, 1, 1, 1 } or M.color.healthBg,
+    texture = castArt and M.modernWow.texture.castFill or
+              (modern and M.unitFrame.statusTexture or nativeTexture),
   })
   -- Kept for the rows stacked under the cast bar (style.BelowOffset).
-  overlay.castGap = 2
+  overlay.castGap = castArt and castArt.spacing * artScale or 2
   cast:SetPoint("TOPLEFT", health, "BOTTOMLEFT", 0, -overlay.castGap)
-  if not modern then
+  local castTextX, castTimeX = 3, -3
+  if castArt then
+    cast.puiBackground:SetTexture(M.modernWow.texture.castBackground)
+    -- Additive, as the source draws it: with the default blend its black
+    -- field is a moving dark square, so it is dropped if the blend fails.
+    local spark = cast:CreateTexture(nil, "OVERLAY")
+    spark:SetTexture(M.modernWow.texture.castSpark)
+    if spark.SetBlendMode and pcall(spark.SetBlendMode, spark, "ADD") then
+      spark:SetWidth(castArt.sparkWidth * artScale)
+      spark:SetHeight((castArt.height + castArt.sparkExtra) * artScale)
+      overlay.castSpark = spark
+    end
+    spark:Hide()
+    castTextX = castHeight + castArt.textGap * artScale
+    castTimeX = -castArt.timeInset * artScale
+  elseif not modern then
     U.CreateBorder(cast)
     U.SetBorderColor(cast, M.Unpack(M.color.border))
   end
+  overlay.castTextX = castTextX
   cast:Hide()
   overlay.cast = cast
 
+  local castFont = castArt and
+                   math.max(M.fontSize.tiny,
+                            math.floor(castArt.font * artScale + 0.5)) or
+                   M.fontSize.tiny
   overlay.castName = U.CreateLabel(cast, {
-    size = M.fontSize.tiny,
+    size = castFont,
     color = M.color.text,
     inherits = "GameFontNormalSmall",
     justify = "LEFT",
   })
   if overlay.castName then
-    overlay.castName:SetPoint("LEFT", cast, "LEFT", 3, 0)
+    overlay.castName:SetPoint("LEFT", cast, "LEFT", castTextX, 0)
   end
 
   overlay.castTime = U.CreateLabel(cast, {
-    size = M.fontSize.tiny,
+    size = castFont,
     color = M.color.text,
     inherits = "GameFontNormalSmall",
     justify = "RIGHT",
   })
   if overlay.castTime then
-    overlay.castTime:SetPoint("RIGHT", cast, "RIGHT", -3, 0)
+    overlay.castTime:SetPoint("RIGHT", cast, "RIGHT", castTimeX, 0)
   end
 
-  -- Spell icon beside the bar, spanning health and cast rows (pfUI's plate
-  -- layout); a child of the cast bar, so it hides with it. Placed by
-  -- style.LayoutCastIcon.
+  -- Spell icon, a child of the cast bar so it hides with it; placed by
+  -- style.LayoutCastIcon. Modern WoW: inside the bar's left edge, the bar's
+  -- full height, no border. Other themes: beside the bar, spanning health and
+  -- cast rows (pfUI's plate layout).
   local castIcon = CreateFrame("Frame", nil, cast)
   castIcon.texture = castIcon:CreateTexture(nil, "ARTWORK")
   castIcon.texture:SetAllPoints(castIcon)
   castIcon.texture:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-  if not modern then
+  if not modern and not castArt then
     U.CreateBorder(castIcon)
     U.SetBorderColor(castIcon, M.Unpack(M.color.border))
   end
@@ -1631,6 +1671,31 @@ local function RefreshTargetCast(overlay)
 
   overlay.cast:SetMinMaxValues(0, duration)
   overlay.cast:SetValue(elapsed)
+
+  -- Modern WoW: the fill art is cropped to the progress rather than squeezed
+  -- (its shape is baked in), and the spark rides the fill's edge, hidden at
+  -- both ends as in the source.
+  if overlay.castArt then
+    local progress = duration > 0 and elapsed / duration or 0
+    if progress < 0 then progress = 0 end
+    if progress > 1 then progress = 1 end
+    if progress > 0 then
+      pcall(overlay.cast.puiFillTexture.SetTexCoord,
+            overlay.cast.puiFillTexture, 0, progress, 0, 1)
+    end
+    local spark = overlay.castSpark
+    if spark then
+      if progress > 0 and progress < 1 then
+        spark:ClearAllPoints()
+        spark:SetPoint("CENTER", overlay.cast, "LEFT",
+                       (tonumber(overlay.cast:GetWidth()) or 0) * progress, 0)
+        spark:Show()
+      else
+        spark:Hide()
+      end
+    end
+  end
+
   if overlay.castName then overlay.castName:SetText(spell) end
   if overlay.castTime then
     overlay.castTime:SetText(string.format("%.1f", duration - elapsed))

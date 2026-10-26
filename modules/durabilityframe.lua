@@ -98,6 +98,6 @@ function DF:OnEnable()
   -- The client may rebuild the paper doll when equipment durability changes.
   -- This is an accelerator; the low-frequency pass also repairs a replaced or
   -- re-anchored native root without taking over its visibility lifecycle.
-  U.RegisterEvent("UPDATE_INVENTORY_DURABILITY", BindNative)
+  U.RegisterEvent("UPDATE_INVENTORY_ALERTS", BindNative)
   U.RegisterUpdate("durabilityframe.anchor", 1.0, BindNative)
 end

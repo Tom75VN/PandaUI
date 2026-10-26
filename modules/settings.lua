@@ -131,7 +131,8 @@ end
 -- content of their own and clicking one expands or collapses it.
 --
 -- options  { after = "<entry id>", defaultPage = "<page id>",
---            icon = "<extensionless texture path>", category = true,
+--            icon = "<extensionless texture path>",
+--            watermark = "<extensionless texture path>", category = true,
 --            version = "<text>" | fn, title = "<text>" | fn }.
 --          after places the group like RegisterSettingsTab's option does;
 --          defaultPage is opened whenever a click expands the group; the rest
@@ -158,6 +159,7 @@ function U.RegisterSettingsGroup(id, label, options)
   options = options or {}
   entry.defaultPage = options.defaultPage
   entry.icon = options.icon
+  entry.watermark = options.watermark
   MarkAddonCategory(entry, options)
 
   local afterIndex
@@ -188,7 +190,8 @@ end
 --          widgets is the array of regions shown with the page; refresh, when
 --          returned, runs every time the page is opened.
 -- options  { parent = "<group id>", after = "<entry id>", muted = true,
---            tooltip = "...", icon = "<extensionless texture path>" }.
+--            tooltip = "...", icon = "<extensionless texture path>",
+--            watermark = "<extensionless texture path>" }.
 --          Muted pages remain selectable so they can explain why their normal
 --          controls are unavailable; only their sidebar presentation changes.
 function U.RegisterSettingsTab(id, label, build, options)
@@ -212,6 +215,7 @@ function U.RegisterSettingsTab(id, label, build, options)
     muted = options.muted and true or false,
     tooltip = options.tooltip,
     icon = options.icon,
+    watermark = options.watermark,
   }
   MarkAddonCategory(entry, options)
   local afterIndex
@@ -431,22 +435,54 @@ end
 -- that also carries the native pages), never on a page, so it stays put while
 -- pages switch or scroll, and it sits on a BACKGROUND layer so every widget
 -- draws above it.
--- Square pUI_logo art at the 185-unit width of the watermark it replaced.
+-- Square mascot art at the established 185-unit settings watermark size.
 local PANDA_WIDTH, PANDA_HEIGHT = 185, 185
 local PANDA_ALPHA = 0.2
 local PANDA_INSET = 8
+local watermarkHosts = {}
+
+local function WatermarkPath(entry)
+  local current = entry
+  while current do
+    if type(current.watermark) == "string" and current.watermark ~= "" then
+      return current.watermark
+    end
+    current = current.parent and FindEntry(current.parent) or nil
+  end
+  return M.texture.settingsWatermark
+end
+
+local function PaintPandaWatermark(host, entry)
+  local tex = host and host.pandaWatermark
+  if tex then pcall(tex.SetTexture, tex, WatermarkPath(entry)) end
+end
+
+local function PaintPandaWatermarks(entry)
+  local i
+  for i = 1, table.getn(watermarkHosts) do
+    PaintPandaWatermark(watermarkHosts[i], entry)
+  end
+end
+function U.ResetSettingsWatermark()
+  PaintPandaWatermarks(nil)
+end
 
 local function AddPandaWatermark(host)
-  if not host or host.pandaWatermark then return end
+  if not host then return end
+  if host.pandaWatermark then
+    PaintPandaWatermark(host, activePage)
+    return
+  end
   local ok, tex = pcall(host.CreateTexture, host, nil, "BACKGROUND")
   if not ok or not tex then return end
-  pcall(tex.SetTexture, tex, M.texture.addonLogo)
+  pcall(tex.SetTexture, tex, WatermarkPath(activePage))
   pcall(tex.SetWidth, tex, PANDA_WIDTH)
   pcall(tex.SetHeight, tex, PANDA_HEIGHT)
   pcall(tex.SetPoint, tex, "BOTTOMRIGHT", host, "BOTTOMRIGHT",
         -PANDA_INSET, PANDA_INSET)
   pcall(tex.SetVertexColor, tex, 1, 1, 1, PANDA_ALPHA)
   host.pandaWatermark = tex
+  table.insert(watermarkHosts, host)
 end
 U.AddSettingsWatermark = AddPandaWatermark
 
@@ -469,6 +505,7 @@ SelectPage = function(entry)
   end
 
   SetListShown(entry.widgets, true)
+  PaintPandaWatermarks(entry)
   if type(entry.refresh) == "function" then entry.refresh() end
 
   activePage = entry
@@ -1281,6 +1318,7 @@ function U.SelectIntegratedSettingsPage(id, scope)
     U.gameSettings.StyleIntegratedWidgets(entry.widgets)
   end
   SetListShown(entry.widgets, true)
+  PaintPandaWatermarks(entry)
   if type(entry.refresh) == "function" then entry.refresh() end
   -- Its refresh may have rewritten labels; the next query reads them again.
   if type(U.ForgetIntegratedSettingsText) == "function" then

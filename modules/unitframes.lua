@@ -968,6 +968,96 @@ function UF.healthText.Config()
   return cfg
 end
 
+-- Power readouts follow the same two-sided model. "default" keeps the frame's
+-- authored power token for that side, so an untouched install looks as before.
+UF.powerText = {
+  defaults = { powerTextLeft = "default", powerTextRight = "default",
+               textsOnHover = false,
+               healthTextSize = 0, powerTextSize = 0 },
+  cfg = nil,
+}
+
+function UF.powerText.Config()
+  if UF.powerText.cfg then return UF.powerText.cfg end
+  local cfg = U.ModuleConfig("unitframes", UF.powerText.defaults)
+  if cfg.powerTextLeft ~= "percent" and cfg.powerTextLeft ~= "number" and
+     cfg.powerTextLeft ~= "hidden" then
+    cfg.powerTextLeft = "default"
+  end
+  if cfg.powerTextRight ~= "percent" and cfg.powerTextRight ~= "number" and
+     cfg.powerTextRight ~= "hidden" then
+    cfg.powerTextRight = "default"
+  end
+  if U.db then UF.powerText.cfg = cfg end
+  return cfg
+end
+
+function UF.powerText.Token(value, authored)
+  if value == "percent" then return "powerpct" end
+  if value == "number" then return "powerval" end
+  if value == "hidden" then return nil end
+  return authored
+end
+
+function UF.powerText.Labels(labels)
+  local cfg = UF.powerText.Config()
+  return UF.powerText.Token(cfg.powerTextLeft, labels and labels.left),
+         UF.powerText.Token(cfg.powerTextRight, labels and labels.right)
+end
+
+-- Optional: health and power readouts only show while the cursor is over the
+-- frame. Identity text (name, level) is untouched; only the value tokens are
+-- dropped from the label pass, and a full refresh on enter/leave restores them.
+-- Exact size for the health and power bar readouts; 0 keeps the authored size.
+-- Applied lazily from ApplyBarLabels so it lands after any theme sizing pass.
+function UF.powerText.Size(kind)
+  local value = tonumber(UF.powerText.Config()[kind .. "TextSize"])
+  if not value or value < 6 then return 0 end
+  return value
+end
+
+function UF.powerText.ApplySize(frame, box, kind)
+  if not box then return end
+  local want = UF.powerText.Size(kind)
+  local size = want
+  if want <= 0 then
+    if not box.puiTextSize then return end
+    size = frame.spec[kind .. "LabelSize"]
+    box.puiTextSize = nil
+  elseif box.puiTextSize == want then
+    return
+  else
+    box.puiTextSize = want
+  end
+  if not size then return end
+
+  local labels = { box.leftLabel, box.rightLabel }
+  local shadow = frame.puiModernWowLabelShadow or M.compactTextShadowOffset
+  local i
+  for i = 1, 2 do
+    if labels[i] then
+      if labels[i].puiOutline then
+        pcall(U.SetFont, labels[i], size, "OUTLINE", "unitframe", nil, true)
+      else
+        pcall(U.SetFont, labels[i], size, nil, "unitframe", nil, true)
+        pcall(U.SetTextShadow, labels[i], shadow,
+              shadow.color or M.color.shadowStrong)
+      end
+    end
+  end
+end
+
+function UF.powerText.IsValueToken(token)
+  return token == "healthdyn" or token == "healthpct" or
+         token == "healthval" or token == "powerdyn" or
+         token == "powerpct" or token == "powerval"
+end
+
+function UF.powerText.HoverOnly(frame)
+  return frame and not frame.puiHover and
+         UF.powerText.Config().textsOnHover == true
+end
+
 function UF.healthText.IsHealthToken(token)
   return token == "healthdyn" or token == "healthpct" or
          token == "healthval"
@@ -1054,6 +1144,9 @@ end
 function classicNative.UsesNative(id)
   if not classicNative.Enabled() or type(id) ~= "string" then return false end
   if string.find(id, "^party") then
+    -- Raid-style party frames (fixed at load, UF:OnEnable) replace the
+    -- client's party frames, so they are suppressed like Modern WoW's.
+    if classicNative.raidParty then return false end
     return not (type(U.ClassicModernModuleEnabled) == "function" and
                 U.ClassicModernModuleEnabled("partyframes"))
   end
@@ -1831,6 +1924,7 @@ model3d.settingKeys = {
   target = "portrait3dTarget",
   targettarget = "portrait3dTargetTarget",
   party = "portrait3dParty",
+  pet = "portrait3dPet",
 }
 
 model3d.portraitKeys = {
@@ -1838,13 +1932,16 @@ model3d.portraitKeys = {
   target = "portraitTarget",
   targettarget = "portraitTargetTarget",
   party = "portraitParty",
+  -- Modern shows or hides the pet's portrait with the player's.
+  pet = "portraitPlayer",
 }
 
--- Pet belongs to the player frame family, while target and target-of-target
--- are independent. Both party members and party pets share the party family.
+-- Player, pet, target and target-of-target are independent families. Both
+-- party members and party pets share the party family.
 function model3d.Family(frame)
   local id = frame and frame.spec and frame.spec.id
-  if id == "player" or id == "pet" then return "player" end
+  if id == "player" then return "player" end
+  if id == "pet" then return "pet" end
   if id == "target" then return "target" end
   if id == "targettarget" then return "targettarget" end
   if type(id) == "string" and string.find(id, "^party") then return "party" end
@@ -3928,6 +4025,19 @@ function powerTick.OnUnitEvent(event, unit)
   end
 end
 
+-- The layer is sized by SetAllPoints, and an anchor-sized frame's GetWidth is
+-- its extent times its effective scale, while SetPoint offsets are in its own
+-- units (layout.anchor_sized_getwidth_times_effective_scale). Measure from the
+-- edges so the spark ends exactly at the bar's right edge at any frame scale.
+function powerTick.MeasureWidth()
+  local layer = powerTick.layer
+  local left, right = layer:GetLeft(), layer:GetRight()
+  if type(left) == "number" and type(right) == "number" and right > left then
+    return right - left
+  end
+  return tonumber(layer:GetWidth()) or 0
+end
+
 function powerTick.Update()
   if not powerTick.layer then return end
 
@@ -3959,7 +4069,7 @@ function powerTick.Update()
 
   local width = powerTick.width
   if not width or width <= 0 then
-    width = tonumber(powerTick.layer:GetWidth()) or 0
+    width = powerTick.MeasureWidth()
     powerTick.width = width
     powerTick.markerX = nil
   end
@@ -4217,8 +4327,17 @@ end
 
 local function ApplyBarLabels(frame, box, labels, mode, isHealth)
   if not box or not labels then return end
+  UF.powerText.ApplySize(frame, box, isHealth and "health" or "power")
   local left, right = labels.left, labels.right
-  if isHealth then left, right = UF.healthText.Labels(labels) end
+  if isHealth then
+    left, right = UF.healthText.Labels(labels)
+  elseif box == frame.power then
+    left, right = UF.powerText.Labels(labels)
+  end
+  if UF.powerText.HoverOnly(frame) then
+    if UF.powerText.IsValueToken(left) then left = nil end
+    if UF.powerText.IsValueToken(right) then right = nil end
+  end
 
   if box.leftLabel and TokenNeedsRefresh(left, mode) then
     SetLabelText(box.leftLabel, StatusText(frame, left))
@@ -4597,6 +4716,9 @@ local function FrameUnitExists(frame)
 end
 
 local function RefreshFrame(frame, mode)
+  if frame.spec.id == "targettarget" then
+    frame.puiDisabled = not (U.db and U.db.targetTargetEnabled ~= false)
+  end
   -- A frame the configuration has switched off stays hidden whatever its unit
   -- is doing, and is not worth an API read. This is checked ahead of the
   -- unlocked-shell branch below on purpose: edit mode must not put a handle-
@@ -4773,6 +4895,65 @@ function U.SetUnitFrameHealthTextSetting(key, value)
   elseif key == "right" then store = "healthTextRight"
   else return false end
   if value ~= "percent" and value ~= "number" then value = "hidden" end
+  if cfg[store] == value then return true end
+  cfg[store] = value
+  RefreshAll()
+  if type(U.RefreshUnitFrameSettingsViews) == "function" then
+    U.RefreshUnitFrameSettingsViews()
+  end
+  return true
+end
+
+function U.GetUnitFrameTextsOnHover()
+  return UF.powerText.Config().textsOnHover == true
+end
+
+function U.SetUnitFrameTextsOnHover(value)
+  local cfg = UF.powerText.Config()
+  value = value and true or false
+  if cfg.textsOnHover == value then return true end
+  cfg.textsOnHover = value
+  RefreshAll()
+  if type(U.RefreshUnitFrameSettingsViews) == "function" then
+    U.RefreshUnitFrameSettingsViews()
+  end
+  return true
+end
+
+function U.GetUnitFrameTextSize(kind)
+  return UF.powerText.Size(kind)
+end
+
+function U.SetUnitFrameTextSize(kind, value)
+  if kind ~= "health" and kind ~= "power" then return false end
+  local cfg = UF.powerText.Config()
+  value = tonumber(value) or 0
+  if value < 6 then value = 0 end
+  if cfg[kind .. "TextSize"] == value then return true end
+  cfg[kind .. "TextSize"] = value
+  RefreshAll()
+  if type(U.RefreshUnitFrameSettingsViews) == "function" then
+    U.RefreshUnitFrameSettingsViews()
+  end
+  return true
+end
+
+function U.GetUnitFramePowerTextSetting(key)
+  local cfg = UF.powerText.Config()
+  if key == "left" then return cfg.powerTextLeft end
+  if key == "right" then return cfg.powerTextRight end
+  return nil
+end
+
+function U.SetUnitFramePowerTextSetting(key, value)
+  local cfg = UF.powerText.Config()
+  local store
+  if key == "left" then store = "powerTextLeft"
+  elseif key == "right" then store = "powerTextRight"
+  else return false end
+  if value ~= "percent" and value ~= "number" and value ~= "hidden" then
+    value = "default"
+  end
   if cfg[store] == value then return true end
   cfg[store] = value
   RefreshAll()
@@ -5316,6 +5497,10 @@ function unitMouse.Enable(frame, unit)
   end)
 
   frame:SetScript("OnEnter", function()
+    if frame.health and frame.power and UF.powerText.Config().textsOnHover then
+      frame.puiHover = true
+      RefreshFrame(frame, "full")
+    end
     local tooltip = U.G("GameTooltip")
     if not tooltip then return end
 
@@ -5330,6 +5515,10 @@ function unitMouse.Enable(frame, unit)
   end)
 
   frame:SetScript("OnLeave", function()
+    if frame.puiHover then
+      frame.puiHover = nil
+      RefreshFrame(frame, "full")
+    end
     local tooltip = U.G("GameTooltip")
     if not tooltip then return end
 
@@ -5508,13 +5697,45 @@ end
 -- mover handle and the snap edges the grid uses stay over the visible frames
 -- instead of over a rectangle sized for a layout that is not on screen.
 -- ---------------------------------------------------------------------------
-local PARTY_DEFAULTS = { partyPets = false, partyPlayer = true }
+local PARTY_DEFAULTS = { partyPets = false, partyPlayer = true,
+                         partyRaidStyle = false }
 
 -- Same "unitframes" store the colour settings use -- U.ModuleConfig only fills
 -- in the keys of the defaults table it is handed, so the two views never
 -- overwrite each other. Read partyPets through this one.
 local function PartyConfig()
   return U.ModuleConfig("unitframes", PARTY_DEFAULTS)
+end
+
+-- Raid-style party frames (user request, 2026-10-26): the party block drawn
+-- by modules/raidframes.lua's cells in one vertical column, under classic-wow
+-- and modern-wow only. Under classic-wow with the client's own party frames
+-- the choice decides at load whether those frames are suppressed, so there it
+-- holds the loaded value until /reload. No new file locals: this chunk is at
+-- its top-level local budget (rules/pandaui.md).
+-- Whether the Party Frames pages offer the option at all.
+function U.PartyRaidStyleAvailable()
+  local style = type(U.GetActiveThemeStyle) == "function" and
+                U.GetActiveThemeStyle() or nil
+  return style == "classic-wow" or style == "modern-wow"
+end
+
+function U.PartyRaidStyleNeedsReload()
+  return classicNative.Enabled() and
+         not (type(U.ClassicModernModuleEnabled) == "function" and
+              U.ClassicModernModuleEnabled("partyframes"))
+end
+
+function U.PartyRaidStyleActive()
+  if not U.PartyRaidStyleAvailable() then return false end
+  if U.PartyRaidStyleNeedsReload() then
+    return classicNative.raidParty and true or false
+  end
+  return PartyConfig().partyRaidStyle and true or false
+end
+
+function U.PartyAnchorFrame()
+  return frames[PARTY_ANCHOR]
 end
 
 -- Whether member i's pet row occupies space this pass. Edit mode shows every
@@ -5558,15 +5779,34 @@ LayoutParty = function(force)
   local anchor = frames[PARTY_ANCHOR]
   if not anchor then return end
 
+  -- Raid-style party frames: every row hides and modules/raidframes.lua's
+  -- column, a child of the anchor, gives the anchor its size.
+  local raidWidth, raidHeight = nil, nil
+  if U.PartyRaidStyleActive() and type(U.RaidPartyFootprint) == "function" then
+    raidWidth, raidHeight = U.RaidPartyFootprint()
+  end
+  local raid = U.PartyRaidStyleActive()
+
   local border = U.BorderSize()
-  local player = PartyPlayerShown()
+  local player = PartyPlayerShown() and not raid
   local shown, shape, i = {}, border .. ":" .. (player and "P" or "-"), nil
   for i = 1, PARTY_COUNT do
-    shown[i] = PartyPetShown(i)
+    shown[i] = PartyPetShown(i) and not raid
     shape = shape .. (shown[i] and "1" or "0")
+  end
+  if raid then
+    shape = shape .. ":R" .. tostring(raidWidth) .. "x" .. tostring(raidHeight)
   end
   if not force and shape == partyLayoutShape then return end
   partyLayoutShape = shape
+
+  for i = 1, PARTY_COUNT do
+    local member = frames["party" .. i]
+    if member then
+      member.puiDisabled = raid or nil
+      if raid then SetFrameShown(member, false) end
+    end
+  end
 
   -- `offset` is in the rows' own units: every row of the block shares one
   -- scale (modules/modernwow.lua mw.units gives them all the same trim).
@@ -5660,6 +5900,12 @@ LayoutParty = function(force)
   -- see. `ratio` (computed above) converts the rows' units into the anchor's.
   local height = offset * ratio
 
+  if raid then
+    anchor:SetWidth(raidWidth or (PARTY_WIDTH + 2 * U.BorderSize()))
+    anchor:SetHeight(raidHeight or 1)
+    return
+  end
+
   anchor:SetWidth((width > 0 and width or
                    (PARTY_WIDTH + 2 * U.BorderSize())) * ratio)
   anchor:SetHeight(height > 0 and height or 1)
@@ -5676,6 +5922,8 @@ local function ApplyPartyLayout()
 
   local i
   for i = 1, PARTY_COUNT do
+    local member = frames["party" .. i]
+    if member then RefreshFrame(member, "full") end
     local pet = frames["partypet" .. i]
     if pet then RefreshFrame(pet, "full") end
   end
@@ -5712,7 +5960,19 @@ end
 function U.SetUnitFramePartySetting(key, value)
   if PARTY_DEFAULTS[key] == nil then return false end
   PartyConfig()[key] = value and true or false
+  if key == "partyRaidStyle" and U.PartyRaidStyleNeedsReload() then
+    -- The client's own party frames are suppressed or kept at load only.
+    U.ShowConfirm({
+      owner = "unitframes.party-raid-reload",
+      centered = true,
+      text = U.L("UF_PARTY_HEADER"),
+      detail = U.L("UF_PARTY_RAID_STYLE_RELOAD"),
+      acceptText = U.L("COMMON_OK_SHORT"),
+      cancelText = U.L("COMMON_CLOSE"),
+    })
+  end
   ApplyPartyLayout()
+  if type(U.ApplyRaidPartyStyle) == "function" then U.ApplyRaidPartyStyle() end
   if type(U.RefreshUnitFrameSettingsViews) == "function" then
     U.RefreshUnitFrameSettingsViews()
   end
@@ -5883,12 +6143,53 @@ local function BuildUnitFramePartySettings(parent, y, width)
   petToggle.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y - 54)
   table.insert(widgets, petToggle)
 
+  -- classic-wow and modern-wow only (U.PartyRaidStyleAvailable).
+  local raidToggle
+  if U.PartyRaidStyleAvailable() then
+    raidToggle = U.CreateCheckbox(parent, {
+      name = "PandaUISettingsPartyRaidStyle",
+      text = U.L("UF_PARTY_RAID_STYLE"),
+      value = U.GetUnitFramePartySetting("partyRaidStyle"),
+      onChange = function(value)
+        U.SetUnitFramePartySetting("partyRaidStyle", value)
+      end,
+    })
+    raidToggle.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y - 78)
+    table.insert(widgets, raidToggle)
+  end
+
+  -- Party buff/debuff icon size, in percent of the built size (user request,
+  -- 2026-10-26); modules/auras.lua owns it. It also sizes the party HoTs and
+  -- the raid-style column's icons.
+  local sliderY = y - (raidToggle and 124 or 100)
+  local iconSize
+  if type(U.AuraPartyIconSizeLimits) == "function" then
+    local min, max, step = U.AuraPartyIconSizeLimits()
+    iconSize = U.CreateSlider(parent, {
+      name = "PandaUISettingsPartyIconSize",
+      text = U.L("UF_PARTY_ICON_SIZE"),
+      width = 200,
+      min = min,
+      max = max,
+      step = step,
+      value = U.GetAuraSetting("partyIconSize"),
+      onChange = function(value) U.SetAuraSetting("partyIconSize", value) end,
+    })
+    iconSize.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, sliderY)
+    table.insert(widgets, iconSize)
+  end
+
   local function Refresh()
     playerToggle.SetValue(U.GetUnitFramePartySetting("partyPlayer"))
     petToggle.SetValue(U.GetUnitFramePartySetting("partyPets"))
+    if raidToggle then
+      raidToggle.SetValue(U.GetUnitFramePartySetting("partyRaidStyle"))
+    end
+    if iconSize then iconSize.SetValue(U.GetAuraSetting("partyIconSize")) end
   end
 
-  return widgets, Refresh
+  -- The top of the section below this one.
+  return widgets, Refresh, sliderY - 64
 end
 
 -- The target frame's exact creature health and mana (core/unitvitals.lua),
@@ -5923,6 +6224,20 @@ end
 function U.GetPortrait3D(family)
   local key = model3d.settingKeys[family]
   return key and U.db and U.db[key] and true or false
+end
+
+function U.GetTargetTargetEnabled()
+  return not (U.db and U.db.targetTargetEnabled == false)
+end
+
+function U.SetTargetTargetEnabled(value)
+  if not U.db then return false end
+  U.db.targetTargetEnabled = value and true or false
+  RefreshAll()
+  if type(U.RefreshUnitFrameSettingsViews) == "function" then
+    U.RefreshUnitFrameSettingsViews()
+  end
+  return true
 end
 
 function U.GetPortraitEnabled(family)
@@ -5992,6 +6307,7 @@ end
 -- lines, which is more than the longest translation needs.
 local EXACT_VITALS_SECTION_HEIGHT = 96
 UF.healthTextSectionHeight = 78
+UF.powerTextSectionHeight = 78
 
 local function BuildUnitFrameGeneralSettings(parent, y, width)
   y = y or -4
@@ -6070,9 +6386,152 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
 
   y = y - UF.healthTextSectionHeight
 
-  -- Portraits: one independent switch for each mover-owned frame family. Pet
-  -- follows player and party pets follow party; target and target-of-target
-  -- are independent, matching model3d.Family above.
+  local powerHeader = U.CreateSectionHeader(parent, {
+    text = U.L("UF_POWER_TEXT_HEADER"),
+    width = width or U.SETTINGS_PAGE_WIDTH,
+    y = y,
+  })
+  table.insert(widgets, powerHeader)
+
+  local powerSides = {
+    { key = "left", caption = "UF_HEALTH_TEXT_LEFT", x = 0,
+      name = "PandaUISettingsPowerTextLeft" },
+    { key = "right", caption = "UF_HEALTH_TEXT_RIGHT", x = U.SETTINGS_COLUMN_X,
+      name = "PandaUISettingsPowerTextRight" },
+  }
+  local powerDropdowns = {}
+  local ps
+  for ps = 1, 2 do
+    local side = powerSides[ps]
+    local label = U.CreateSettingsLabel(parent, {
+      size = M.fontSize.small,
+      color = M.color.accent,
+      inherits = "GameFontNormalSmall",
+      justify = "LEFT",
+      width = U.SETTINGS_COLUMN_WIDTH,
+    })
+    if label then
+      label:SetPoint("TOPLEFT", parent, "TOPLEFT", side.x, y - 26)
+      label:SetText(U.L(side.caption))
+      table.insert(widgets, label)
+    end
+    local dropdown = U.CreateDropdown(parent, {
+      name = side.name,
+      width = U.SETTINGS_COLUMN_WIDTH,
+      height = 24,
+      rowHeight = 20,
+      value = U.GetUnitFramePowerTextSetting(side.key),
+      items = {
+        { value = "default", text = U.L("UF_POWER_TEXT_DEFAULT") },
+        { value = "hidden", text = U.L("UF_HEALTH_TEXT_HIDDEN") },
+        { value = "percent", text = U.L("UF_HEALTH_TEXT_PERCENT") },
+        { value = "number", text = U.L("UF_POWER_TEXT_VALUE") },
+      },
+      onChange = function(value)
+        U.SetUnitFramePowerTextSetting(side.key, value)
+      end,
+    })
+    dropdown.SetPoint("TOPLEFT", parent, "TOPLEFT", side.x, y - 42)
+    powerDropdowns[side.key] = dropdown
+    table.insert(widgets, dropdown)
+  end
+
+  y = y - UF.powerTextSectionHeight
+
+  local sizeHeader = U.CreateSectionHeader(parent, {
+    text = U.L("UF_TEXT_SIZE_HEADER"),
+    width = width or U.SETTINGS_PAGE_WIDTH,
+    y = y,
+  })
+  table.insert(widgets, sizeHeader)
+
+  local sizeSides = {
+    { kind = "health", caption = "UF_TEXT_SIZE_HEALTH", x = 0,
+      name = "PandaUISettingsHealthTextSize" },
+    { kind = "power", caption = "UF_TEXT_SIZE_POWER", x = U.SETTINGS_COLUMN_X,
+      name = "PandaUISettingsPowerTextSize" },
+  }
+  local sizeDropdowns = {}
+  local ss
+  for ss = 1, 2 do
+    local side = sizeSides[ss]
+    local label = U.CreateSettingsLabel(parent, {
+      size = M.fontSize.small,
+      color = M.color.accent,
+      inherits = "GameFontNormalSmall",
+      justify = "LEFT",
+      width = U.SETTINGS_COLUMN_WIDTH,
+    })
+    if label then
+      label:SetPoint("TOPLEFT", parent, "TOPLEFT", side.x, y - 26)
+      label:SetText(U.L(side.caption))
+      table.insert(widgets, label)
+    end
+    local dropdown = U.CreateDropdown(parent, {
+      name = side.name,
+      width = U.SETTINGS_COLUMN_WIDTH,
+      height = 24,
+      rowHeight = 20,
+      value = U.GetUnitFrameTextSize(side.kind),
+      items = {
+        { value = 0, text = U.L("UF_POWER_TEXT_DEFAULT") },
+        { value = 6, text = "6" },
+        { value = 7, text = "7" },
+        { value = 8, text = "8" },
+        { value = 9, text = "9" },
+        { value = 10, text = "10" },
+        { value = 11, text = "11" },
+        { value = 12, text = "12" },
+        { value = 13, text = "13" },
+        { value = 14, text = "14" },
+        { value = 16, text = "16" },
+      },
+      onChange = function(value)
+        U.SetUnitFrameTextSize(side.kind, value)
+      end,
+    })
+    dropdown.SetPoint("TOPLEFT", parent, "TOPLEFT", side.x, y - 42)
+    sizeDropdowns[side.kind] = dropdown
+    table.insert(widgets, dropdown)
+  end
+
+  y = y - UF.powerTextSectionHeight
+
+  local hoverToggle = U.CreateCheckbox(parent, {
+    name = "PandaUISettingsTextsOnHover",
+    text = U.L("UF_TEXT_ON_HOVER"),
+    value = U.GetUnitFrameTextsOnHover(),
+    onChange = function(value)
+      U.SetUnitFrameTextsOnHover(value)
+    end,
+  })
+  hoverToggle.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y + 8)
+  table.insert(widgets, hoverToggle)
+  y = y - 30
+
+  local targetTargetHeader = U.CreateSectionHeader(parent, {
+    text = U.L("UF_TARGET_TARGET_HEADER"),
+    width = width or U.SETTINGS_PAGE_WIDTH,
+    y = y,
+  })
+  table.insert(widgets, targetTargetHeader)
+
+  local targetTargetToggle = U.CreateCheckbox(parent, {
+    name = "PandaUISettingsTargetTargetEnabled",
+    text = U.L("UF_TARGET_TARGET_ENABLED"),
+    value = U.GetTargetTargetEnabled(),
+    onChange = function(value)
+      U.SetTargetTargetEnabled(value)
+    end,
+  })
+  targetTargetToggle.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y - 26)
+  table.insert(widgets, targetTargetToggle)
+
+  y = y - 56
+
+  -- Portraits: one independent 3D switch for each mover-owned frame family,
+  -- matching model3d.Family above. Party pets follow party; Modern's pet
+  -- visibility follows the player switch.
   local portraitHeader = U.CreateSectionHeader(parent, {
     text = U.L("UF_PORTRAIT_HEADER"),
     width = width or U.SETTINGS_PAGE_WIDTH,
@@ -6163,8 +6622,22 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   })
   portrait3dParty.SetPoint("TOPLEFT", parent, "TOPLEFT",
                            modernPortraits and U.SETTINGS_COLUMN_X or 0,
-                           y - (modernPortraits and 98 or 50))
+                           y - (modernPortraits and 98 or 74))
   table.insert(widgets, portrait3dParty)
+
+  local portrait3dPet = U.CreateCheckbox(parent, {
+    name = "PandaUISettingsPortrait3DPet",
+    text = U.L("UF_PORTRAIT_3D_PET"),
+    textWidth = U.SETTINGS_COLUMN_WIDTH - 26,
+    value = U.GetPortrait3D("pet"),
+    onChange = function(value)
+      U.SetPortrait3D("pet", value)
+    end,
+  })
+  portrait3dPet.SetPoint("TOPLEFT", parent, "TOPLEFT",
+                         modernPortraits and U.SETTINGS_COLUMN_X or 0,
+                         y - (modernPortraits and 122 or 50))
+  table.insert(widgets, portrait3dPet)
 
   local portraitHint = U.CreateSettingsLabel(parent, {
     size = M.fontSize.small,
@@ -6174,13 +6647,16 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
     width = width or U.SETTINGS_PAGE_WIDTH,
   })
   if portraitHint then
-    U.AnchorSettingsDescription(portraitHint,
-      modernPortraits and portraitParty.box or portrait3dParty.box)
+    U.AnchorSettingsDescription(portraitHint, portrait3dParty.box)
+    if modernPortraits then
+      U.AnchorSettingsDescription(portraitHint, portrait3dPet.box,
+                                  -U.SETTINGS_COLUMN_X)
+    end
     portraitHint:SetText(U.L("UF_PORTRAIT_3D_HINT"))
     table.insert(widgets, portraitHint)
   end
 
-  y = y - (modernPortraits and 166 or EXACT_VITALS_SECTION_HEIGHT + 24)
+  y = y - (modernPortraits and 190 or EXACT_VITALS_SECTION_HEIGHT + 48)
 
   -- Class-icon portraits for the player and target frames. The style picker
   -- shows only while the option is on.
@@ -6368,6 +6844,12 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   local function Refresh()
     healthLeft.SetValue(U.GetUnitFrameHealthTextSetting("left"))
     healthRight.SetValue(U.GetUnitFrameHealthTextSetting("right"))
+    powerDropdowns.left.SetValue(U.GetUnitFramePowerTextSetting("left"))
+    powerDropdowns.right.SetValue(U.GetUnitFramePowerTextSetting("right"))
+    hoverToggle.SetValue(U.GetUnitFrameTextsOnHover())
+    sizeDropdowns.health.SetValue(U.GetUnitFrameTextSize("health"))
+    sizeDropdowns.power.SetValue(U.GetUnitFrameTextSize("power"))
+    targetTargetToggle.SetValue(U.GetTargetTargetEnabled())
     if modernPortraits then
       portraitPlayer.SetValue(U.GetPortraitEnabled("player"))
       portraitTarget.SetValue(U.GetPortraitEnabled("target"))
@@ -6377,11 +6859,13 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
       portrait3dTarget.SetEnabled(U.GetPortraitEnabled("target"))
       portrait3dTargetTarget.SetEnabled(U.GetPortraitEnabled("targettarget"))
       portrait3dParty.SetEnabled(U.GetPortraitEnabled("party"))
+      portrait3dPet.SetEnabled(U.GetPortraitEnabled("pet"))
     end
     portrait3dPlayer.SetValue(U.GetPortrait3D("player"))
     portrait3dTarget.SetValue(U.GetPortrait3D("target"))
     portrait3dTargetTarget.SetValue(U.GetPortrait3D("targettarget"))
     portrait3dParty.SetValue(U.GetPortrait3D("party"))
+    portrait3dPet.SetValue(U.GetPortrait3D("pet"))
     classIcon.SetValue(U.GetPortraitClassIcon())
     classIconStyle.SetValue(U.GetPortraitClassIconStyleIndex())
     classIconStyle.puiSetShown(U.GetPortraitClassIcon())
@@ -6592,12 +7076,12 @@ end
 -- the second section's state, so it builds it; this page only places it under
 -- the party controls and merges the two refreshes.
 local function BuildPartyPage(parent)
-  local widgets, refreshParty = BuildUnitFramePartySettings(parent, -4,
-                                                            U.SETTINGS_PAGE_WIDTH)
+  local widgets, refreshParty, nextY =
+    BuildUnitFramePartySettings(parent, -4, U.SETTINGS_PAGE_WIDTH)
   local refreshHots
   if type(U.BuildHotSettings) == "function" then
     local hotWidgets
-    hotWidgets, refreshHots = U.BuildHotSettings(parent, -88,
+    hotWidgets, refreshHots = U.BuildHotSettings(parent, nextY,
                                                  U.SETTINGS_PAGE_WIDTH)
     local i
     for i = 1, table.getn(hotWidgets) do
@@ -6657,11 +7141,11 @@ function UF:OnEnable()
   local modernUnits = nativeChrome and
                       type(U.ClassicModernModuleEnabled) == "function" and
                       U.ClassicModernModuleEnabled("unitframes") or false
-  local modernParty = nativeChrome and
-                      type(U.ClassicModernModuleEnabled) == "function" and
-                      U.ClassicModernModuleEnabled("partyframes") or false
+  -- Read before UsesNative is first asked about the party (see there).
+  classicNative.raidParty = U.PartyRaidStyleAvailable() and
+                            PartyConfig().partyRaidStyle and true or false
   SuppressStockFrames(not nativeChrome or modernUnits,
-                      not nativeChrome or modernParty)
+                      not classicNative.UsesNative("party1"))
   unitMouse.AddPartyWhisper()
 
   frames[PARTY_ANCHOR] = BuildPartyAnchor()
@@ -6786,6 +7270,10 @@ function UF:OnEnable()
   U.RegisterUpdate("unitframes.refresh", 0.2, RefreshScheduledUnits)
 
   RefreshAll()
+
+  -- The raid-style party column is built by modules/raidframes.lua, which may
+  -- have enabled before this anchor existed.
+  if type(U.ApplyRaidPartyStyle) == "function" then U.ApplyRaidPartyStyle() end
 
   -- The Modern theme opts every owned unit-frame bar in after the initial
   -- refresh, so the first real health/power change animates from a settled

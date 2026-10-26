@@ -334,7 +334,7 @@ local function ShowUnitFrameCheck()
     end
   end
 
-  -- Warriors, Rogues and Druids only. modules/stancebar.lua never creates its bar or
+  -- Warriors, Rogues, Druids and Paladins only. modules/stancebar.lua never creates its bar or
   -- mover for any other class, so supported false with created false is the
   -- expected line for everyone else. "classic" reports whether the buttons
   -- took the client's own action-button faces, which only Classic WoW does.
@@ -2278,7 +2278,7 @@ handlers["portrait3d"] = function(rest)
     for i = 1, table.getn(PORTRAIT3D_LEVELS) do
       U.Print("  |cffffff00/pui portrait3d " .. PORTRAIT3D_LEVELS[i])
     end
-    U.Print("  player, target, target-of-target and party switches apply within this ceiling")
+    U.Print("  player, pet, target, target-of-target and party switches apply within this ceiling")
     U.Print("  units the level excludes, or that are out of sight, keep the 2D portrait")
     return
   end

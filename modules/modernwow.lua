@@ -1076,8 +1076,8 @@ mw.units = {
   { id = "player",       art = "playerFrame", bg = "playerFrameBg",
     power = "powerFill", mirror = true, shiftLabels = true,
     -- The player's two readout rows use the smaller shared font step, then
-    -- sit on each bar's geometric centre. Keep these per-entry so the target,
-    -- pet and party typography is unchanged.
+    -- sit on each bar's geometric centre. Keep these per-entry so the target
+    -- and party typography is unchanged.
     -- Health readouts 1px smaller (user request, 2026-10-15; was small).
     healthLabelSize = M.fontSize.small - 1,
     -- Name and level 1px smaller (user request, 2026-10-15; was small).
@@ -1162,9 +1162,19 @@ mw.units = {
   -- The pet mirrors the target housing into portrait-left reading order, so
   -- its unmirrored bed must be the player file. The target bed extends beneath
   -- the left-hand ring and shows through as two dark horizontal bands.
+  -- Text at the player's sizes (user request, 2026-10-26). The pet's bars are
+  -- 2/3 of the player's (health 20, power 8), so each row is centred on its
+  -- bar instead of taking the player's upward nudges.
   { id = "pet",          art = "targetFrame", bg = "playerFrameBg",
     power = "totPowerFill", mirror = true, powerX = -2, healthValueX = -2,
-    alignPowerPercent = true, powerPercentY = 2,
+    headerSize = M.fontSize.small - 1,
+    -- Bar text 1 below the player's (user request, 2026-10-26).
+    healthLabelSize = M.fontSize.small - 2,
+    powerLabelSize = M.fontSize.small - 3,
+    healthLabelY = 1,
+    powerLabelY = 1,
+    labelShadowOffset = mw.labelShadow,
+    alignPowerPercent = true, powerPercentY = 3,
     header = { name = 2, level = -4 } },
 }
 
