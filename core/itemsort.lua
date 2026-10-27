@@ -272,10 +272,10 @@ end
 -- Bundled templates use Database/item_sort.lua's offline-derived order:
 -- category, functional family, subgroup, tier, then exact item id. That last
 -- field guarantees every stack and random-property variant of one template is
--- adjacent. The database was derived from numeric VMaNGOS item/profession data,
--- so it does not depend on the client's broad localized class strings.
+-- adjacent. The database was derived from numeric Turtle WoW item/profession
+-- data, so it does not depend on the client's localized class strings.
 --
--- Unknown/custom templates keep the former live fallback: category, client
+-- Unknown/newer templates keep the former live fallback: category, client
 -- type/subtype/equipment slot, normalized tooltip family, then exact item id,
 -- quality, name and full link. It is intentionally below the static fast path
 -- rather than removed; the game can contain templates newer than the snapshot.

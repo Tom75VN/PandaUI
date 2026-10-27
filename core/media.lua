@@ -88,10 +88,10 @@ M.texture = {
   statusBar = "Interface\\AddOns\\pandaUI\\media\\Textures\\normTex2",
   -- 256x256 TGA of the author's "Magical Panda UI Designer.png" (1254 px),
   -- cropped to its art, padded square and downscaled with premultiplied
-  -- alpha: the bottom-right settings watermark (modules/settings.lua).
+  -- alpha: the bottom-right watermark of pandaUI settings pages (modules/settings.lua).
   addonLogo = "Interface\\AddOns\\pandaUI\\media\\icons\\pUI_logo",
   -- 256x256 TGA of the author's Panda/game-settings.png (already 256 px, no
-  -- resize): the default bottom-right settings watermark, drawn at 185 units
+  -- resize): the bottom-right watermark of client settings pages, drawn at 185 units
   -- (modules/settings.lua).
   settingsWatermark = "Interface\\AddOns\\pandaUI\\media\\icons\\pUI_settings-panda",
   -- 64x64 TGA of the author's pUI-logo-small.png, drawn at 18-20 units
@@ -142,6 +142,9 @@ M.texture = {
   -- Named separately so a later change to either marker cannot silently move
   -- the other.
   favoriteIcon = "Interface\\AddOns\\pandaUI\\media\\leader-star",
+  -- PandaQuest's available-quest mark, copied unchanged into pandaUI so bag
+  -- quest-starter badges do not depend on that addon being installed.
+  questStarter = "Interface\\AddOns\\pandaUI\\media\\Textures\\quest-starter",
   -- The bag/bank header action icons: user-supplied 64x64 art in media/icons,
   -- drawn with the same edge crop as the stock key and bag toggles, as
   -- uncompressed 32-bit type-2 TGA (the encoding of leader-star and
@@ -966,6 +969,27 @@ M.modernWow.scrollbar = {
   },
 }
 
+-- Flat Modern minimap geometry. The native map remains the content and input
+-- owner; the all-white texture is also the square mask used by pfUI-octo.
+M.minimapModern = {
+  maskTexture = M.texture.plain,
+  borderSize = 1,
+  topPanelHeight = 18,
+  topPanelGap = 1,
+  topPanelInset = 4,
+  zoneFontSize = M.fontSize.small,
+  zoneY = -1,
+  zoneRefresh = 1,
+  zoomSize = 18,
+  zoomInset = 3,
+  zoomGap = 3,
+  mailInset = 2,
+}
+
+-- The stock 1.12 round minimap mask. Every theme except Modern sets it
+-- explicitly, so a square mask left from a Modern session never carries over.
+M.minimapRoundMask = "Textures\\MinimapMask"
+
 -- Minimap chrome, measured from the 140-unit round-map layout the imported
 -- art was authored around. The panel follows the live map width so the native
 -- minimap remains the geometry authority; only its ornamental chrome changes.
@@ -1732,6 +1756,9 @@ M.modernWow.trainer = {
 -- 676x440 window owned by modules/questlog.lua instead of shrinking inside it.
 M.modernWow.questLog = {
   split = 896 / (896 + 298),
+  -- Cover fractional rasterisation at the two authored source canvases'
+  -- shared edge without moving the split used by controls on either page.
+  seamOverlap = 1,
   leftTiles = {
     sourceWidth = 896, sourceHeight = 823, tileSize = 512,
     paths = {
@@ -2808,7 +2835,6 @@ M.modernWow.professions = {
   filter = {
     x = 5, y = 72, width = 274, height = 60, gap = 4,
     size = 20, reagentTop = 7,
-    cell = { left = 1, top = 79, right = 269, bottom = 113 },
     dropdown = { x = 10, y = 8, width = 110, textY = -2 },
     reagents = { x = 136, width = 138 },
     search = { x = 12, y = 29, right = 8 },
@@ -6081,6 +6107,18 @@ M.slot = {
   search = { left = 8, right = 6, widthScale = 0.85, poll = 0.1,
              dimAlpha = 0.8, borderAlpha = 0.2,
              match = M.modernWow.bags.search.match },
+}
+
+-- Small available-quest mark on a bag or bank item that begins a quest. The
+-- source is a 19x32 glyph on a 32x32 power-of-two canvas; crop the empty right
+-- side and preserve the authored aspect at the compact item-slot scale.
+M.questStarter = {
+  texture = M.texture.questStarter,
+  sourceSlot = 30,
+  width = 13 * 19 / 32,
+  height = 13,
+  inset = 1,
+  texCoord = { 0, 19 / 32, 0, 1 },
 }
 
 -- Retail ContainerFrameItemButtonTemplate's bags-junkcoin. The source slot is

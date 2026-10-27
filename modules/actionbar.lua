@@ -651,6 +651,12 @@ function classicAction.Face(source, getter, fallback)
   }
 end
 
+function classicAction.IconRatio(icon, button)
+  local ratio = button > 0 and icon / button or 0
+  if ratio <= 0 or ratio > 1 then return 1 end
+  return ratio
+end
+
 function classicAction.Capture()
   classicAction.active = type(U.ThemeStyleUsesNativeChrome) == "function" and
                          U.ThemeStyleUsesNativeChrome() and
@@ -677,8 +683,14 @@ function classicAction.Capture()
   local sourceHeight = classicAction.Dimension(source, "GetHeight")
   local iconWidth = classicAction.Dimension(nativeIcon, "GetWidth")
   local iconHeight = classicAction.Dimension(nativeIcon, "GetHeight")
-  classicAction.iconWidthRatio = sourceWidth > 0 and iconWidth / sourceWidth or nil
-  classicAction.iconHeightRatio = sourceHeight > 0 and iconHeight / sourceHeight or nil
+  -- ActionButtonTemplate gives $parentIcon no size or anchor, so it fills the
+  -- button. Read before layout, its width is the loaded icon's natural size
+  -- (64 for a spell), which drew icons far larger than their slots. Only a
+  -- read inside the button is trusted; anything else is the template's 1.
+  classicAction.iconWidthRatio =
+    classicAction.IconRatio(iconWidth, sourceWidth)
+  classicAction.iconHeightRatio =
+    classicAction.IconRatio(iconHeight, sourceHeight)
   classicAction.ready = classicAction.normal and true or false
 
   if not classicAction.ready then
@@ -2473,7 +2485,8 @@ local function UpdateCooldown(button)
 end
 
 -- Empty-slot backgrounds are optional per bar (actionbarconfig.lua's "Slot
--- border" checkbox, ticked = shown; stored inverted as HideBackground): when
+-- border" checkbox, "Slot background" under modern; ticked = shown; stored
+-- inverted as HideBackground): when
 -- hidden, only slots carrying an icon show
 -- any fill/outline at all, so an empty bar reads as bare icons with nothing
 -- behind them rather than a grid of boxes.

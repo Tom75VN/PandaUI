@@ -229,10 +229,28 @@ local function UpdateCorpseArrow()
   end
 
   local inset = layout.visibleSize / 2
+  local directionX = -math.sin(angle)
+  local directionY = math.cos(angle)
+  local offsetX, offsetY
+  if state.squareMinimap then
+    local xLimit = width / 2 - inset
+    local yLimit = height / 2 - inset
+    local distance
+    local absX = math.abs(directionX)
+    local absY = math.abs(directionY)
+    if absX > 0 then distance = xLimit / absX end
+    if absY > 0 then
+      local yDistance = yLimit / absY
+      if not distance or yDistance < distance then distance = yDistance end
+    end
+    distance = distance or 0
+    offsetX, offsetY = directionX * distance, directionY * distance
+  else
+    offsetX = directionX * (width / 2 - inset)
+    offsetY = directionY * (height / 2 - inset)
+  end
   frame:ClearAllPoints()
-  frame:SetPoint("CENTER", minimap, "CENTER",
-    -math.sin(angle) * (width / 2 - inset),
-    math.cos(angle) * (height / 2 - inset))
+  frame:SetPoint("CENTER", minimap, "CENTER", offsetX, offsetY)
   frame:Show()
 end
 
@@ -317,6 +335,7 @@ function ARROW:OnEnable()
   end
 
   state.facingModel = FindFacingModel(U.G("Minimap"))
+  state.squareMinimap = U.GetActiveThemeStyle() == "modern"
   state.worldMapFacingModel = FindFacingModel(U.G("WorldMapFrame"))
   local initialCell = FacingCell()
   if initialCell == nil then

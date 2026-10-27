@@ -1215,8 +1215,33 @@ function classicNative.PublishAuraLayout(anchor)
   anchor.puiAuraLayout.belowTop = barBottom - anchorTop - 4
 end
 
+-- The edit-mode Scale (%) lands on the invisible anchor, and an anchored
+-- (not parented) native root does not inherit it, so only the anchor's own
+-- children (auras, portrait overlay) grew. Give the native root and its click
+-- catcher the anchor's effective scale. The ratio to each one's own parent
+-- also covers native roots parented to another scaled root (PetFrame,
+-- TargetofTargetFrame); Reanchor walks the roots parent first.
+function classicNative.MatchScale(frame, target)
+  if not frame or type(frame.SetScale) ~= "function" then return end
+  local ok, parent = pcall(frame.GetParent, frame)
+  local parentScale = 1
+  if ok and parent then
+    parentScale = classicNative.Dimension(parent, "GetEffectiveScale")
+  end
+  if parentScale <= 0 or target <= 0 then return end
+  local scale = target / parentScale
+  if math.abs(classicNative.Dimension(frame, "GetScale") - scale) > 0.001 then
+    pcall(frame.SetScale, frame, scale)
+  end
+end
+
 function classicNative.Anchor(anchor, native)
   if not anchor or not native then return end
+
+  -- Before the size reads below: native and anchor then share one unit.
+  local anchorScale = classicNative.Dimension(anchor, "GetEffectiveScale")
+  classicNative.MatchScale(native, anchorScale)
+  classicNative.MatchScale(anchor.puiClassicClickCatcher, anchorScale)
 
   -- Repositioning the client-owned root is what makes the native art follow
   -- PandaUI's mover. The 2026-09-06 login-crash bisect cleared it: with this
@@ -2111,16 +2136,18 @@ end
 -- ---------------------------------------------------------------------------
 -- Optional class-icon portrait (U.db.portraitClassIcon)
 --
--- Player and target frames only, every theme. While the unit is a player
--- character its class circle from the selected M.classIcon sheet replaces the
--- 2D or 3D portrait; an NPC target keeps the normal portrait path. Gated on
--- UnitIsPlayer like the Modern WoW fallback below: a creature has no class.
--- The icon is not mirrored on the target; the art has its own orientation.
+-- Player, target and target-of-target frames only, every theme. While the unit
+-- is a player character its class circle from the selected M.classIcon sheet
+-- replaces the 2D or 3D portrait; an NPC keeps the normal portrait path. Gated
+-- on UnitIsPlayer like the Modern WoW fallback below: a creature has no class.
+-- The icon is not mirrored on target frames; the art has its own orientation.
 -- Kept on model3d: this file is at Lua 5.0's active-local limit.
 -- ---------------------------------------------------------------------------
 function model3d.ClassIconSource(frame)
   local id = frame and frame.spec and frame.spec.id
-  if id ~= "player" and id ~= "target" then return nil end
+  if id ~= "player" and id ~= "target" and id ~= "targettarget" then
+    return nil
+  end
   if not U.db or not U.db.portraitClassIcon then return nil end
   local unit = frame.unit
   if not unit or not ApiTruth("UnitIsPlayer", unit) then return nil end
@@ -5677,6 +5704,7 @@ local function BuildPartyAnchor()
     label = U.L("MOVER_LABEL_PARTY"),
     default = { point = "TOPLEFT", relativePoint = "TOPLEFT", x = 5, y = -5 },
     scalable = true,
+    onScale = classicNative.Reanchor,
   })
 
   -- No unit of its own, so nothing ever hides it: the members handle their own
@@ -6313,6 +6341,19 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   y = y or -4
   local widgets = {}
 
+  local nampowerStatus, refreshNampower = U.CreateOptionalStatusSection(parent, {
+    header = U.L("NAMPOWER_HEADER"),
+    name = U.L("NAMPOWER_NAME"),
+    note = U.L("NAMPOWER_HINT"),
+    detectedText = U.L("NAMPOWER_DETECTED"),
+    missingText = U.L("NAMPOWER_NOT_DETECTED"),
+    detected = U.NampowerDetected,
+    width = width or U.SETTINGS_PAGE_WIDTH,
+    y = y,
+  })
+  table.insert(widgets, nampowerStatus)
+  y = y - U.OPTIONAL_STATUS_SECTION_HEIGHT
+
   local healthHeader = U.CreateSectionHeader(parent, {
     text = U.L("UF_HEALTH_TEXT_HEADER"),
     width = width or U.SETTINGS_PAGE_WIDTH,
@@ -6658,8 +6699,8 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
 
   y = y - (modernPortraits and 190 or EXACT_VITALS_SECTION_HEIGHT + 48)
 
-  -- Class-icon portraits for the player and target frames. The style picker
-  -- shows only while the option is on.
+  -- Class-icon portraits for player, target and target-of-target frames. The
+  -- style picker shows only while the option is on.
   local classIconHeader = U.CreateSectionHeader(parent, {
     text = U.L("UF_CLASS_ICON_HEADER"),
     width = width or U.SETTINGS_PAGE_WIDTH,
@@ -6842,6 +6883,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   end
 
   local function Refresh()
+    if refreshNampower then refreshNampower() end
     healthLeft.SetValue(U.GetUnitFrameHealthTextSetting("left"))
     healthRight.SetValue(U.GetUnitFrameHealthTextSetting("right"))
     powerDropdowns.left.SetValue(U.GetUnitFramePowerTextSetting("left"))
@@ -7177,6 +7219,7 @@ function UF:OnEnable()
         label = U.L(spec.labelKey, spec.labelArg),
         default = spec.default,
         scalable = true,
+        onScale = classicNative.Reanchor,
       })
     end
 

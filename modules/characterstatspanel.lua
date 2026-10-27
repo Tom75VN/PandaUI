@@ -1,8 +1,8 @@
 -- pandaUI :: modules/characterstatspanel.lua
 --
--- The Character window's integrated stats pane under the `character` Modern
--- WoW surface (user request, 2026-09-28): every stat modules/characterstats.lua
--- can read, listed down the right the way Retail's CharacterStatsPane does.
+-- The Character window's statistics for all three themes. Modern and Modern
+-- WoW list every value down the right in their own side-panel style; Classic
+-- uses BetterCharacterStats' native two-column, six-row selector layout.
 --
 -- Entry point only. modules/modernwow.lua's mw.BuildCharacter calls
 -- U.BuildCharacterStatsPanel once it has dressed the window, and falls back to
@@ -27,10 +27,8 @@
 -- The third tab, "equipment", hides the list for the Equipment Manager
 -- (modules/characterequipment.lua), which draws its own in this pane.
 --
--- An estimated value carries a "?" (user request): hovering it explains that
--- the client has no API for that stat and lists what the estimate is built
--- from. Both hovers are PandaUI's own flat info tooltip (U.ShowInfoTooltip,
--- core/widgets.lua), not GameTooltip.
+-- The row type keeps a "?" path for future estimates. Current combat rows use
+-- BetterCharacterStats' gear, talent and aura calculations and show normally.
 --
 -- Native frames touched, all by global name and never walked:
 --   * CharacterAttributesFrame is hidden while the paper doll shows -- its
@@ -62,6 +60,12 @@ local SP = {
   frame = nil,
   mode = "stats",
   flat = false,
+  classic = {
+    UPDATE = "characterstats.classic-refresh",
+    left = "base",
+    right = "melee",
+    rows = { {}, {} },
+  },
 }
 U.CharacterStatsPanel = SP
 
@@ -825,6 +829,235 @@ function U.BuildCharacterStatsPanel(frame)
     U.Error("character stats panel: " .. tostring(err))
     if SP.panel then pcall(SP.panel.Hide, SP.panel) end
     SP.panel = nil
+    return false
+  end
+  return true
+end
+
+-- ---------------------------------------------------------------------------
+-- Classic WoW: BetterCharacterStats-style native paper-doll block
+-- ---------------------------------------------------------------------------
+function SP.ClassicTooltip(row)
+  local data = row and row.data
+  local tip = U.G("GameTooltip")
+  if not data or not tip then return end
+  pcall(tip.SetOwner, tip, row, "ANCHOR_RIGHT")
+  pcall(tip.SetText, tip, data.tip and data.tip.title or data.label)
+  if data.tip then
+    local i
+    for i = 1, table.getn(data.tip) do
+      local line = data.tip[i]
+      if line[2] and type(tip.AddDoubleLine) == "function" then
+        pcall(tip.AddDoubleLine, tip, line[1], line[2], 1, 0.82, 0, 1, 1, 1)
+      elseif line[1] then
+        pcall(tip.AddLine, tip, line[1], 1, 0.82, 0, 1)
+      end
+    end
+  end
+  if data.estimate then
+    pcall(tip.AddLine, tip, U.L("CHARSTATS_EST_TITLE"), 1, 0.82, 0, 1)
+    pcall(tip.AddLine, tip, U.L("CHARSTATS_EST_BODY"), 0.75, 0.75, 0.75, 1)
+    local i
+    for i = 1, table.getn(data.estimate) do
+      pcall(tip.AddLine, tip, data.estimate[i], 1, 1, 1, 1)
+    end
+  end
+  pcall(tip.Show, tip)
+end
+
+function SP.ClassicBuildRow(root, column, index)
+  local row = CreateFrame("Frame", nil, root)
+  row:SetWidth(104)
+  row:SetHeight(13)
+  row:SetPoint("TOPLEFT", root, "TOPLEFT", 6 + (column - 1) * 115,
+               -3 - (index - 1) * 13)
+  pcall(row.EnableMouse, row, true)
+  row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  row.label:SetPoint("LEFT", row, "LEFT", 0, 0)
+  row.value = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.value:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+  pcall(row.value.SetJustifyH, row.value, "RIGHT")
+  row:SetScript("OnEnter", function() SP.ClassicTooltip(row) end)
+  row:SetScript("OnLeave", function()
+    local tip = U.G("GameTooltip")
+    if tip then pcall(tip.Hide, tip) end
+  end)
+  SP.classic.rows[column][index] = row
+end
+
+function SP.ClassicBuildBackground(root)
+  local specs = {
+    { 0, 0, 115, 16, 0, 0.8984375, 0, 0.125 },
+    { 0, -16, 115, 53, 0, 0.8984375, 0.125, 0.1953125 },
+    { 0, -69, 115, 16, 0, 0.8984375, 0.484375, 0.609375 },
+    { 115, 0, 115, 16, 0, 0.8984375, 0, 0.125 },
+    { 115, -16, 115, 53, 0, 0.8984375, 0.125, 0.1953125 },
+    { 115, -69, 115, 16, 0, 0.8984375, 0.484375, 0.609375 },
+  }
+  local i
+  for i = 1, table.getn(specs) do
+    local spec = specs[i]
+    local texture = root:CreateTexture(nil, "BORDER")
+    texture:SetTexture("Interface\\PaperDollInfoFrame\\UI-Character-StatBackground")
+    texture:SetWidth(spec[3])
+    texture:SetHeight(spec[4])
+    texture:SetPoint("TOPLEFT", root, "TOPLEFT", spec[1], spec[2])
+    texture:SetTexCoord(spec[5], spec[6], spec[7], spec[8])
+  end
+end
+
+function SP.ClassicPage(pages, key)
+  local i
+  for i = 1, table.getn(pages) do
+    if pages[i].key == key then return pages[i] end
+  end
+  return pages[1]
+end
+
+function SP.ClassicFill(column, page)
+  local rows = SP.classic.rows[column]
+  local i
+  for i = 1, 6 do
+    local row = rows[i]
+    local data = page and page.rows[i]
+    row.data = data
+    if data then
+      row.label:SetText(data.label)
+      row.value:SetText(data.value)
+      row.value:SetTextColor(M.Unpack(data.color or M.color.text))
+      row:Show()
+    else
+      row:Hide()
+    end
+  end
+end
+
+function SP.ClassicSetDropdown(column, page)
+  local dropdown = SP.classic.dropdowns[column]
+  if not dropdown or not page then return end
+  pcall(UIDropDownMenu_SetSelectedValue, dropdown, page.key)
+  pcall(UIDropDownMenu_SetText, page.title, dropdown)
+end
+
+function SP.ClassicRefresh()
+  local stats = U.CharacterStats
+  if not stats or type(stats.GetPages) ~= "function" then return end
+  local ok, pages = pcall(stats.GetPages)
+  if not ok or type(pages) ~= "table" then
+    U.Debug("classic characterstats: " .. tostring(pages))
+    return
+  end
+  local left = SP.ClassicPage(pages, SP.classic.left)
+  local right = SP.ClassicPage(pages, SP.classic.right)
+  SP.ClassicFill(1, left)
+  SP.ClassicFill(2, right)
+  SP.ClassicSetDropdown(1, left)
+  SP.ClassicSetDropdown(2, right)
+end
+
+function SP.ClassicSelect(column, key)
+  if column == 1 then SP.classic.left = key else SP.classic.right = key end
+  SP.ClassicRefresh()
+end
+
+function SP.ClassicInitDropdown(dropdown, column)
+  local function Init()
+    local pages = U.CharacterStats and U.CharacterStats.PAGES or {}
+    local i
+    for i = 1, table.getn(pages) do
+      local page = pages[i]
+      local include = page.key ~= "ranged"
+      local relic = U.G("UnitHasRelicSlot")
+      if not include and type(relic) == "function" then
+        local ok, hasRelic = pcall(relic, "player")
+        include = not (ok and hasRelic)
+      elseif not include then
+        include = true
+      end
+      if include then
+        local key = page.key
+        local info = {}
+        info.text = U.L(page.title)
+        info.value = key
+        local selected = (column == 1 and SP.classic.left == key) or
+                         (column == 2 and SP.classic.right == key)
+        info.checked = selected and 1 or nil
+        info.func = function() SP.ClassicSelect(column, key) end
+        UIDropDownMenu_AddButton(info)
+      end
+    end
+  end
+  UIDropDownMenu_Initialize(dropdown, Init)
+  UIDropDownMenu_SetWidth(99, dropdown)
+end
+
+function SP.ClassicTick()
+  local tip = U.G("GameTooltip")
+  if tip then
+    local ok, shown = pcall(tip.IsShown, tip)
+    if ok and shown then return end
+  end
+  SP.ClassicRefresh()
+end
+
+function SP.ClassicOnShow()
+  local attributes = U.G("CharacterAttributesFrame")
+  local resistances = U.G("CharacterResistanceFrame")
+  if attributes then pcall(attributes.Hide, attributes) end
+  if resistances then pcall(resistances.Hide, resistances) end
+  if U.CharacterStats then U.CharacterStats.Invalidate() end
+  SP.ClassicRefresh()
+  SP.classic.frame:Show()
+  U.RegisterUpdate(SP.classic.UPDATE, 0.5, SP.ClassicTick)
+end
+
+function SP.ClassicOnHide()
+  U.UnregisterUpdate(SP.classic.UPDATE)
+  if SP.classic.frame then SP.classic.frame:Hide() end
+end
+
+function SP.BuildClassic(frame)
+  local paperDoll = U.G("PaperDollFrame")
+  if not frame or not paperDoll then error("native paper doll unavailable") end
+  local root = CreateFrame("Frame", "PandaUIClassicCharacterStats", paperDoll)
+  root:SetWidth(230)
+  root:SetHeight(78)
+  root:SetPoint("TOPLEFT", paperDoll, "TOPLEFT", 67, -291)
+  pcall(root.SetFrameLevel, root, SP.Dimension(paperDoll, "GetFrameLevel") + 2)
+  root:Hide()
+  SP.classic.frame = root
+  SP.ClassicBuildBackground(root)
+
+  local column, index
+  for column = 1, 2 do
+    for index = 1, 6 do SP.ClassicBuildRow(root, column, index) end
+  end
+  SP.classic.dropdowns = {}
+  for column = 1, 2 do
+    local dropdown = CreateFrame("Frame", "PandaUIClassicCharacterStatsDropdown" .. column,
+                                 root, "UIDropDownMenuTemplate")
+    dropdown:SetPoint("BOTTOMLEFT", root, "TOPLEFT",
+                      -17 + (column - 1) * 115, -8)
+    pcall(dropdown.SetFrameLevel, dropdown, SP.Dimension(root, "GetFrameLevel") + 4)
+    SP.ClassicInitDropdown(dropdown, column)
+    SP.classic.dropdowns[column] = dropdown
+  end
+
+  U.PostHookScript(paperDoll, "OnShow", SP.ClassicOnShow)
+  U.PostHookScript(paperDoll, "OnHide", SP.ClassicOnHide)
+  local ok, shown = pcall(paperDoll.IsShown, paperDoll)
+  if ok and shown then SP.ClassicOnShow() end
+  return true
+end
+
+function U.BuildClassicCharacterStats(frame)
+  if SP.classic.frame then return true end
+  if not frame or not U.CharacterStats then return false end
+  local ok, err = pcall(SP.BuildClassic, frame)
+  if not ok then
+    U.Error("classic character stats: " .. tostring(err))
+    if SP.classic.frame then pcall(SP.classic.frame.Hide, SP.classic.frame) end
+    SP.classic.frame = nil
     return false
   end
   return true

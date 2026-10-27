@@ -92,7 +92,21 @@ function U.CreateBackdrop(frame, options)
   local background = options.background or M.color.background
   local border = options.border or M.color.border
 
-  if frame.SetBackdrop then
+  -- Some stock frames accept SetBackdrop and report its colour correctly but
+  -- do not rasterize its fill (Octo questlogbg.v1). Callers with that measured
+  -- behaviour can request the same shared panel fill as an owned texture.
+  if options.textureFill and frame.CreateTexture then
+    pcall(frame.SetBackdropColor, frame, 0, 0, 0, 0)
+    pcall(frame.SetBackdropBorderColor, frame, 0, 0, 0, 0)
+    if not frame.puiFill then
+      local fill = frame:CreateTexture(nil, "BACKGROUND")
+      fill:SetTexture(M.texture.plain)
+      fill:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
+      fill:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
+      frame.puiFill = fill
+    end
+    U.SetColor(frame.puiFill, M.Unpack(background))
+  elseif frame.SetBackdrop then
     -- Only the fill is taken from the backdrop; edgeFile is deliberately
     -- omitted rather than requested and left invisible.
     local ok = pcall(frame.SetBackdrop, frame, {

@@ -150,6 +150,17 @@ function classicMode.BuildNativeMoverPanel(frame, contentTop, contentWidth)
   return widgets, Refresh
 end
 
+-- HideBackground hides the slot border art under classic-wow and modern-wow,
+-- which also offer a separate Slot background option. Elsewhere (modern) the
+-- empty slot has only a background, so the same option is named for that.
+local function SlotToggleLabel(bar)
+  if type(U.ActionBarHasSlotBackground) == "function" and
+     U.ActionBarHasSlotBackground(bar) then
+    return U.L("ABC_SLOT_BORDER")
+  end
+  return U.L("ABC_SLOT_BACKGROUND")
+end
+
 local function MoverHint(bar)
   if bar == 1 then return U.L("ABC_HINT_BAR1") end
   if bar >= 2 and bar <= 5 then return U.L("ABC_HINT_MULTIBAR") end
@@ -183,7 +194,7 @@ local function BuildBarPage(parent, bar)
 
   local hideBackground = U.CreateCheckbox(parent, {
     name = "PandaUIActionBarConfigHideBackground" .. bar,
-    text = U.L("ABC_SLOT_BORDER"),
+    text = SlotToggleLabel(bar),
     value = not U.GetActionBarSetting(bar, "HideBackground"),
     onChange = function(value)
       U.SetActionBarSetting(bar, "HideBackground", not value)
@@ -438,6 +449,9 @@ local function BuildMoverPanel(frame, contentTop, contentWidth, includeClassicMo
 
     controls.enable.SetValue(U.GetActionBarSetting(bar, "Enabled"))
     controls.hideBackground.SetValue(not U.GetActionBarSetting(bar, "HideBackground"))
+    if controls.hideBackground.label then
+      controls.hideBackground.label:SetText(SlotToggleLabel(bar))
+    end
     controls.gryphons.puiSetShown(true)
     controls.slotBackground.puiSetShown(true)
     if U.ActionBarHasSlotBackground and U.ActionBarHasSlotBackground(bar) then

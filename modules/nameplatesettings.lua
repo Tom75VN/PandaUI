@@ -26,7 +26,7 @@ local nps = {
 
 -- Vertical space each control type takes from its own top to the next one's.
 nps.ADVANCE = { header = 30, check = 24, color = 24, slider = 64,
-                dropdown = 48 }
+                dropdown = 48, nampower = U.OPTIONAL_STATUS_SECTION_HEIGHT }
 
 -- Dropdown item lists.
 nps.ITEMS = {
@@ -60,14 +60,19 @@ nps.ITEMS = {
 nps.PAGES = {
   {
     id = "general", label = "NP_TAB_GENERAL",
+    { type = "nampower" },
     { type = "header", text = "NP_HEADER_DISPLAY" },
     { type = "check", key = "enabled", text = "SETTINGS_NAMEPLATES" },
     { type = "check", key = "showHostile", text = "NP_SHOW_HOSTILE" },
     { type = "check", key = "showFriendly", text = "NP_SHOW_FRIENDLY", col = 2 },
     { type = "note", text = "NP_VISIBILITY_HINT", lines = 2 },
     { type = "check", key = "showAuras", text = "SETTINGS_NAMEPLATE_AURAS" },
+    { type = "check", key = "allPlateAuras", text = "NP_ALL_PLATE_AURAS",
+      nampower = true },
     { type = "check", key = "attachTargetCast",
       text = "SETTINGS_NAMEPLATE_CASTBAR" },
+    { type = "check", key = "allPlateCasts", text = "NP_ALL_PLATE_CASTS",
+      nampower = true },
     { type = "check", key = "showName", text = "NP_SHOW_NAME" },
     { type = "check", key = "abbrevNames", text = "NP_ABBREV_NAMES", col = 2 },
     { type = "header", text = "NP_HEADER_CLASS" },
@@ -295,7 +300,8 @@ function nps.BuildPage(parent, page)
 
   local function Skipped(spec)
     return spec and ((spec.flat and modernWow) or
-                     (spec.art and not modernWow)) and true or false
+                     (spec.art and not modernWow) or
+                     (spec.nampower and not U.hasNampower)) and true or false
   end
 
   for i = 1, table.getn(page) do
@@ -332,6 +338,21 @@ function nps.BuildPage(parent, page)
           table.insert(widgets, note)
         end
         y = y - (spec.lines or 1) * nps.HINT_LINE - 12
+        last = nil
+      elseif spec.type == "nampower" then
+        local control, refresh = U.CreateOptionalStatusSection(parent, {
+          header = U.L("NAMPOWER_HEADER"),
+          name = U.L("NAMPOWER_NAME"),
+          note = U.L("NAMPOWER_HINT"),
+          detectedText = U.L("NAMPOWER_DETECTED"),
+          missingText = U.L("NAMPOWER_NOT_DETECTED"),
+          detected = U.NampowerDetected,
+          width = nps.PAGE_WIDTH,
+          y = y,
+        })
+        table.insert(widgets, control)
+        if refresh then table.insert(refreshers, refresh) end
+        y = y - nps.ADVANCE.nampower
         last = nil
       else
         local second = spec.col == 2 and last ~= nil

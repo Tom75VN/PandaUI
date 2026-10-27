@@ -93,13 +93,13 @@
 -- UnitCastingInfo("target") and UnitChannelInfo("target") were both nil on all
 -- 221 samples, so the bar never polls them. The same probe observed
 -- CHAT_MSG_SPELL_CREATURE_VS_CREATURE_DAMAGE carrying the localized combat
--- text "Defias Cutpurse begins to perform Backstab.". This module parses the
--- client's SPELLCASTOTHERSTART / SPELLPERFORMOTHERSTART templates, matches the
--- caster to UnitName("target"), and times recognized spells from the compact
--- Vanilla spell table below. Unknown spells are deliberately omitted rather
--- than shown with an invented duration. Name matching has the usual Vanilla
--- ambiguity when several nearby creatures share one name; no unit GUID exists
--- in the captured event payload to distinguish them.
+-- text "Defias Cutpurse begins to perform Backstab.". The stock fallback
+-- parses the localized SPELLCASTOTHERSTART / SPELLPERFORMOTHERSTART templates,
+-- resolves duration and icon from the generated Turtle world database, and
+-- keeps active starts long enough to replay them after a target change.
+-- Nampower's optional SPELL_START_OTHER path supplies exact spell IDs, GUIDs,
+-- durations and channel state; the combat-text path remains complete when the
+-- DLL is absent. Unknown text casts use a visible, tracked estimate.
 --
 -- The pet castbar is the same reconstruction pointed at UnitName("pet"), drawn
 -- under the pet unit frame at that frame's width. There is no pet cast API to
@@ -181,6 +181,10 @@ local TARGET_COMBAT_EVENTS = {
   "CHAT_MSG_SPELL_PERIODIC_PARTY_BUFFS",
   "CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE",
   "CHAT_MSG_SPELL_PERIODIC_CREATURE_BUFFS",
+  "CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE",
+  "CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF",
+  "CHAT_MSG_SPELL_CREATURE_VS_PARTY_DAMAGE",
+  "CHAT_MSG_SPELL_CREATURE_VS_PARTY_BUFF",
   "CHAT_MSG_SPELL_CREATURE_VS_CREATURE_DAMAGE",
   "CHAT_MSG_SPELL_CREATURE_VS_CREATURE_BUFF",
 }
@@ -255,6 +259,24 @@ local TARGET_CASTS = {
   ["Wrath"] = { ms = 2000, icon = "Spell_Nature_AbolishMagic" },
 }
 
+-- The generated database is the accurate first choice. This small table stays
+-- as a defensive fallback and for spells learned from the player's casts.
+local UNKNOWN_TARGET_CAST = {
+  ms = 3000,
+  icon = "INV_Misc_QuestionMark",
+}
+local OBSERVED_CAST_DUPLICATE_WINDOW = 0.20
+local observedCasts = {}       -- caster name -> active combat-text cast
+local observedGuidCasts = {}   -- Nampower caster GUID -> active exact cast
+local recentObservedKeys = {}  -- caster/spell -> last combat-text arrival
+local nextObservedPrune = 0
+local nampowerCvarsEnabled = false
+local nampowerStarts = 0
+local nampowerStops = 0
+local nampowerFailures = 0
+local nampowerInterrupts = 0
+local nampowerPushbacks = 0
+
 local bar
 local casting = false
 local startTime, duration
@@ -287,6 +309,13 @@ local function NewTracker(id, unit, labelKey)
     unknown = 0,
     lastUnknown = nil,
     lastEvent = nil,
+    lastSource = "none",
+    estimated = false,
+    replayed = 0,
+    guid = nil,
+    spellId = nil,
+    kind = "cast",
+    pushbacks = 0,
     iconSource = "none",
   }
   trackers[id] = tracker
@@ -609,6 +638,81 @@ local function RememberTargetSpell(name, castTimeMs)
   }
 end
 
+local function CastMilliseconds(info)
+  if type(info) ~= "table" then return nil end
+  return tonumber(info.ms or info[1])
+end
+
+local function CastIcon(info)
+  if type(info) ~= "table" then return nil end
+  return info.icon or info[2]
+end
+
+local function CastChannel(info)
+  if type(info) ~= "table" then return false end
+  return info.channel == true or info.channel == 1 or info[3] == 1
+end
+
+-- Combat text carries names only. Prefer a creature-specific timing, then the
+-- shared spell-name timing. The old hand-written list is only a safety net.
+local function ResolveUnitCast(caster, spell)
+  local data = U.castSpellData
+  if type(data) == "table" then
+    local byCaster = data.byCaster
+    local casterSpells = type(byCaster) == "table" and byCaster[caster]
+    local info = type(casterSpells) == "table" and casterSpells[spell]
+    if CastMilliseconds(info) then return info, "database-caster", false end
+
+    local bySpell = data.bySpell
+    info = type(bySpell) == "table" and bySpell[spell]
+    if CastMilliseconds(info) then return info, "database-spell", false end
+  end
+
+  local info = TARGET_CASTS[spell]
+  if CastMilliseconds(info) then return info, "static", false end
+  return UNKNOWN_TARGET_CAST, "estimated", true
+end
+
+-- SPELL_START_OTHER supplies an exact spell ID. Its event duration wins; this
+-- row supplies the display name, icon and a database duration fallback.
+-- IDs missing from the static table are named from Nampower's spell DBC
+-- readers; cached per ID (false = unresolvable).
+local nampowerSpellCache = {}
+
+local function ResolveNampowerSpell(spellId)
+  local cached = nampowerSpellCache[spellId]
+  if cached ~= nil then return cached or nil end
+  cached = false
+  local name = U.hasNampower and Call("GetSpellNameAndRankForId", spellId)
+  if type(name) == "string" and name ~= "" then
+    cached = { name = name, info = {} }
+    local iconId = tonumber(Call("GetSpellRecField", spellId, "spellIconID"))
+    local path = iconId and Call("GetSpellIconTexture", iconId)
+    if type(path) == "string" and path ~= "" then
+      cached.info.texture = path
+    end
+  end
+  nampowerSpellCache[spellId] = cached
+  return cached or nil
+end
+
+local function ResolveSpellId(spellId)
+  spellId = tonumber(spellId)
+  local data = U.castSpellData
+  local byId = type(data) == "table" and data.byId
+  local row = type(byId) == "table" and byId[spellId]
+  if type(row) ~= "table" then
+    local np = spellId and ResolveNampowerSpell(spellId)
+    if np then return np.name, np.info end
+    return nil
+  end
+  return row[1], {
+    ms = row[2],
+    icon = row[3],
+    channel = row[4],
+  }
+end
+
 -- `preferred` is a texture the caller already resolved for this exact unit --
 -- the pet tracker reads the real icon out of the pet spellbook -- and wins over
 -- the shared static table, which only knows one icon per spell name.
@@ -620,9 +724,10 @@ local function ApplyUnitIcon(tracker, info, preferred)
   if not texture and info and info.texture then
     texture, source = info.texture, "learned"
   end
-  if not texture and info and type(info.icon) == "string" and
-     info.icon ~= "" and info.icon ~= "Temp" then
-    texture, source = "Interface\\Icons\\" .. info.icon, "static"
+  local icon = CastIcon(info)
+  if not texture and type(icon) == "string" and
+     icon ~= "" and icon ~= "Temp" then
+    texture, source = "Interface\\Icons\\" .. icon, "static"
   end
 
   tracker.iconSource = texture and source or "none"
@@ -911,7 +1016,9 @@ function U.TargetCastInfo()
   local elapsed = GetTime() - tracker.startTime
   if elapsed < 0 then elapsed = 0 end
   if elapsed > tracker.duration then elapsed = tracker.duration end
-  return tracker.spell, elapsed, tracker.duration, tracker.texture
+  local displaySpell = tracker.estimated and
+                       (tracker.spell .. " (?)") or tracker.spell
+  return displaySpell, elapsed, tracker.duration, tracker.texture, tracker.kind
 end
 
 local function ApplyUnitIdlePlaceholder(tracker)
@@ -941,6 +1048,17 @@ local function AnyCastActive()
     local tracker = trackerOrder[i]
     if tracker.casting or Finishing(tracker.bar) then return true end
   end
+  -- Nampower casts drawn on non-target plates (modules/nameplates.lua).
+  if type(U.NameplateGuidCastsWanted) == "function" and
+     U.NameplateGuidCastsWanted() then
+    local now = GetTime()
+    local key, cast
+    for key, cast in pairs(observedGuidCasts) do
+      if now < (tonumber(cast.startTime) or 0) + (tonumber(cast.duration) or 0) then
+        return true
+      end
+    end
+  end
   return false
 end
 
@@ -965,6 +1083,8 @@ local function StopUnitCast(tracker, kind)
   tracker.casting = false
   tracker.caster = nil
   tracker.spell = nil
+  tracker.guid = nil
+  tracker.spellId = nil
   tracker.texture = nil
   tracker.startTime = nil
   tracker.duration = nil
@@ -973,67 +1093,308 @@ local function StopUnitCast(tracker, kind)
   UpdateTickRate()
 end
 
-local function StartUnitCast(tracker, eventName, caster, spell)
-  if not tracker.bar or type(caster) ~= "string" or
-     type(spell) ~= "string" then return end
+local function CastStillActive(cast, now)
+  return type(cast) == "table" and tonumber(cast.startTime) and
+         tonumber(cast.duration) and now < cast.startTime + cast.duration
+end
 
-  -- The unit name is the whole identity check this event contract can offer:
-  -- the chat text names a caster and nothing else.
+-- Read by modules/nameplates.lua for non-target plates: the live Nampower
+-- cast of this caster GUID, in U.TargetCastInfo's shape, or nil.
+function U.GuidCastInfo(guid)
+  local cast = type(guid) == "string" and observedGuidCasts[guid]
+  local now = GetTime()
+  if not cast or not CastStillActive(cast, now) then return nil end
+
+  local elapsed = now - cast.startTime
+  if elapsed < 0 then elapsed = 0 end
+  if cast.plateTexture == nil then
+    local icon = CastIcon(cast.info)
+    cast.plateTexture = (type(icon) == "string" and icon ~= "" and
+                         icon ~= "Temp") and ("Interface\\Icons\\" .. icon) or
+                        false
+  end
+  local spell = cast.estimated and (cast.spell .. " (?)") or cast.spell
+  return spell, elapsed, cast.duration, cast.plateTexture or nil, cast.kind
+end
+
+local function PruneObservedCasts(now)
+  if now < nextObservedPrune then return end
+  local key, cast
+  for key, cast in pairs(observedCasts) do
+    if not CastStillActive(cast, now) then observedCasts[key] = nil end
+  end
+  for key, cast in pairs(observedGuidCasts) do
+    if not CastStillActive(cast, now) then observedGuidCasts[key] = nil end
+  end
+  for key, cast in pairs(recentObservedKeys) do
+    if now - cast > OBSERVED_CAST_DUPLICATE_WINDOW then
+      recentObservedKeys[key] = nil
+    end
+  end
+  nextObservedPrune = now + 5
+end
+
+local function UnitMatchesCast(tracker, cast)
+  if cast.guid then
+    local guid = Call("GetUnitGUID", tracker.unit)
+    return type(guid) == "string" and guid == cast.guid
+  end
   local unitName = Call("UnitName", tracker.unit)
-  if type(unitName) ~= "string" or unitName == "" or
-     caster ~= unitName then return end
+  return type(unitName) == "string" and unitName ~= "" and
+         cast.caster == unitName
+end
 
-  -- A new start supersedes any earlier timer from the same named unit, even
-  -- when the new spell is unknown and therefore cannot be drawn accurately.
-  if tracker.casting then StopUnitCast(tracker) end
-  CancelFinish(tracker.bar)
-  tracker.lastEvent = eventName
+local function CasterNameForGuid(guid)
+  local i
+  for i = 1, table.getn(trackerOrder) do
+    local tracker = trackerOrder[i]
+    if Call("GetUnitGUID", tracker.unit) == guid then
+      return Call("UnitName", tracker.unit)
+    end
+  end
+  return nil
+end
 
-  -- The pet book is the accurate icon source for a pet cast; the shared table
-  -- below only ever holds one icon per spell name.
-  local preferred
-  if tracker.unit == "pet" then preferred = PetSpellIcon(spell) end
-
-  local info = TARGET_CASTS[spell]
-  if not info or not tonumber(info.ms) or tonumber(info.ms) <= 0 then
-    tracker.unknown = tracker.unknown + 1
-    tracker.lastUnknown = spell
+local function StartUnitCast(tracker, cast, replayed)
+  if not tracker.bar or type(cast) ~= "table" or
+     type(cast.spell) ~= "string" or not UnitMatchesCast(tracker, cast) then
     return
   end
 
-  tracker.casting = true
-  tracker.caster = caster
-  tracker.spell = spell
-  tracker.startTime = GetTime()
-  tracker.duration = tonumber(info.ms) / 1000
-  tracker.lastTimeText = nil
-  tracker.starts = tracker.starts + 1
+  local now = GetTime()
+  if not CastStillActive(cast, now) then return end
 
-  -- Reconstructed from combat text, which names a spell and nothing about
-  -- whether it channels, so a unit cast is always drawn as a plain cast.
-  ApplyCastKind(tracker.bar, "cast")
+  -- A combat-chat copy must not replace the exact GUID/ID timer that already
+  -- arrived through Nampower.
+  if tracker.casting and tracker.guid and not cast.guid and
+     tracker.spell == cast.spell then return end
+  if tracker.casting and tracker.guid and cast.guid and
+     tracker.guid == cast.guid and tracker.spellId == cast.spellId and
+     math.abs(tracker.startTime - cast.startTime) <=
+       OBSERVED_CAST_DUPLICATE_WINDOW then return end
+
+  if tracker.casting then StopUnitCast(tracker) end
+  CancelFinish(tracker.bar)
+  tracker.lastEvent = cast.eventName
+  tracker.lastSource = cast.source
+  tracker.estimated = cast.estimated and true or false
+  tracker.kind = cast.kind or "cast"
+  tracker.pushbacks = cast.pushbacks or 0
+  if replayed then
+    tracker.replayed = tracker.replayed + 1
+  else
+    tracker.starts = tracker.starts + 1
+  end
+
+  local preferred
+  if tracker.unit == "pet" then preferred = PetSpellIcon(cast.spell) end
+
+  if cast.estimated and not replayed then
+    tracker.unknown = tracker.unknown + 1
+    tracker.lastUnknown = cast.spell
+  end
+
+  tracker.casting = true
+  tracker.caster = cast.caster
+  tracker.spell = cast.spell
+  tracker.guid = cast.guid
+  tracker.spellId = cast.spellId
+  tracker.startTime = cast.startTime
+  tracker.duration = cast.duration
+  tracker.lastTimeText = nil
+
+  local elapsed = now - tracker.startTime
+  local displaySpell = tracker.estimated and
+                       (tracker.spell .. " (?)") or tracker.spell
+  ApplyCastKind(tracker.bar, tracker.kind)
   ApplyUnitBarTint(tracker.bar)
   pcall(tracker.bar.bar.SetMinMaxValues, tracker.bar.bar, 0,
         tracker.duration)
-  SetUnitBarValue(tracker.bar, 0)
-  if tracker.bar.name then tracker.bar.name:SetText(spell) end
-  ApplyUnitIcon(tracker, info, preferred)
-  ApplyUnitTimer(tracker, tracker.duration)
+  SetUnitBarValue(tracker.bar, elapsed)
+  if tracker.bar.name then tracker.bar.name:SetText(displaySpell) end
+  ApplyUnitIcon(tracker, cast.info, preferred)
+  ApplyUnitTimer(tracker, tracker.duration - elapsed)
   UpdateUnitVisibility(tracker)
   UpdateTickRate()
 end
 
--- One parse, then every tracker gets a look at it: the same message is the
--- target cast while the target is casting and the pet cast while the pet is,
--- and a player targeting their own pet legitimately matches both.
+-- One parse, then every tracker gets a look at it. Repeated copies routed to
+-- multiple combat-chat families are collapsed into one observed start.
 local function OnUnitCombatMessage(eventName, message)
   local caster, spell = CaptureTargetStart(message)
   if not caster or not spell then return end
 
+  local now = GetTime()
+  local key = caster .. "\031" .. spell
+  local previous = recentObservedKeys[key]
+  if previous and now - previous <= OBSERVED_CAST_DUPLICATE_WINDOW then return end
+  recentObservedKeys[key] = now
+  PruneObservedCasts(now)
+
+  local exact = observedCasts[caster]
+  if CastStillActive(exact, now) and exact.guid and exact.spell == spell then
+    local i
+    for i = 1, table.getn(trackerOrder) do
+      StartUnitCast(trackerOrder[i], exact, false)
+    end
+    return
+  end
+
+  local info, source, estimated = ResolveUnitCast(caster, spell)
+  local ms = CastMilliseconds(info)
+  if not ms or ms <= 0 then return end
+  local cast = {
+    eventName = eventName,
+    caster = caster,
+    spell = spell,
+    info = info,
+    source = source,
+    estimated = estimated,
+    startTime = now,
+    duration = ms / 1000,
+    kind = CastChannel(info) and "channel" or "cast",
+  }
+  observedCasts[caster] = cast
+
   local i
   for i = 1, table.getn(trackerOrder) do
-    StartUnitCast(trackerOrder[i], eventName, caster, spell)
+    StartUnitCast(trackerOrder[i], cast, false)
   end
+end
+
+local function ReplayObservedCast(tracker)
+  if not tracker then return end
+  local now = GetTime()
+  local guid = Call("GetUnitGUID", tracker.unit)
+  local cast = type(guid) == "string" and observedGuidCasts[guid]
+  if not CastStillActive(cast, now) then
+    local caster = Call("UnitName", tracker.unit)
+    cast = type(caster) == "string" and observedCasts[caster]
+  end
+  if CastStillActive(cast, now) then StartUnitCast(tracker, cast, true) end
+end
+
+local function OnNampowerStart(eventName, itemId, spellId, casterGuid,
+                                targetGuid, castFlags, castTimeMs,
+                                durationMs, spellType)
+  spellId = tonumber(spellId)
+  if not spellId or type(casterGuid) ~= "string" then return end
+  -- Creatures also send SPELL_START for instant abilities (Snap Kick,
+  -- castTime 0): no bar for those.
+  if tonumber(spellType) ~= 1 and (tonumber(castTimeMs) or 0) <= 0 then
+    return
+  end
+
+  local spell, info = ResolveSpellId(spellId)
+  local knownSpell = spell and true or false
+  if not spell then
+    spell = "#" .. tostring(spellId)
+    info = UNKNOWN_TARGET_CAST
+  end
+
+  local channel = tonumber(spellType) == 1
+  local ms = channel and tonumber(durationMs) or tonumber(castTimeMs)
+  local estimated = false
+  if not ms or ms <= 0 then
+    ms = CastMilliseconds(info) or UNKNOWN_TARGET_CAST.ms
+    estimated = true
+  end
+
+  local now = GetTime()
+  local caster = CasterNameForGuid(casterGuid)
+  local cast = {
+    eventName = eventName,
+    caster = caster or casterGuid,
+    spell = spell,
+    info = info,
+    source = knownSpell and "nampower-id" or "nampower-id-unknown",
+    estimated = estimated,
+    startTime = now,
+    duration = ms / 1000,
+    guid = casterGuid,
+    spellId = spellId,
+    kind = channel and "channel" or "cast",
+    targetGuid = targetGuid,
+    pushbacks = 0,
+  }
+  observedGuidCasts[casterGuid] = cast
+  if caster then observedCasts[caster] = cast end
+  nampowerStarts = nampowerStarts + 1
+
+  local i
+  for i = 1, table.getn(trackerOrder) do
+    StartUnitCast(trackerOrder[i], cast, false)
+  end
+  UpdateTickRate()
+end
+
+local function EndGuidCast(eventName, casterGuid, spellId, finishKind)
+  if type(casterGuid) ~= "string" then return end
+  local cast = observedGuidCasts[casterGuid]
+  if not cast then return end
+  if tonumber(spellId) and cast.spellId ~= tonumber(spellId) then return end
+
+  observedGuidCasts[casterGuid] = nil
+  if cast.caster and observedCasts[cast.caster] == cast then
+    observedCasts[cast.caster] = nil
+  end
+
+  local i
+  for i = 1, table.getn(trackerOrder) do
+    local tracker = trackerOrder[i]
+    if tracker.casting and tracker.guid == casterGuid and
+       (not tonumber(spellId) or tracker.spellId == tonumber(spellId)) then
+      tracker.lastEvent = eventName
+      StopUnitCast(tracker, finishKind)
+    end
+  end
+  UpdateTickRate()
+end
+
+local function OnNampowerGo(eventName, itemId, spellId, casterGuid)
+  nampowerStops = nampowerStops + 1
+  EndGuidCast(eventName, casterGuid, spellId, "stop")
+end
+
+local function OnNampowerFailed(eventName, casterGuid, spellId)
+  nampowerFailures = nampowerFailures + 1
+  EndGuidCast(eventName, casterGuid, spellId, "failed")
+end
+
+local function OnNampowerCombatGuid(eventName, guid, action)
+  if action ~= "INTERRUPT" then return end
+  nampowerInterrupts = nampowerInterrupts + 1
+  EndGuidCast(eventName, guid, nil, "interrupted")
+end
+
+local function OnNampowerDelayed(eventName, casterGuid, delayMs)
+  delayMs = tonumber(delayMs)
+  local cast = type(casterGuid) == "string" and
+               observedGuidCasts[casterGuid]
+  if not cast or not delayMs or delayMs <= 0 then return end
+  local seconds = delayMs / 1000
+  cast.startTime = cast.startTime + seconds
+  cast.pushbacks = (cast.pushbacks or 0) + 1
+  nampowerPushbacks = nampowerPushbacks + 1
+
+  local i
+  for i = 1, table.getn(trackerOrder) do
+    local tracker = trackerOrder[i]
+    if tracker.casting and tracker.guid == casterGuid then
+      tracker.startTime = tracker.startTime + seconds
+      tracker.pushbacks = tracker.pushbacks + 1
+      tracker.lastEvent = eventName
+    end
+  end
+end
+
+local function EnableNampowerEvents()
+  if not U.hasNampower then return end
+  local setCVar = U.G("SetCVar")
+  if type(setCVar) ~= "function" then return end
+  local startOk = pcall(setCVar, "NP_EnableSpellStartEvents", "1")
+  local goOk = pcall(setCVar, "NP_EnableSpellGoEvents", "1")
+  nampowerCvarsEnabled = startOk and goOk
 end
 
 -- Kept shown and given a placeholder fill while the UI is unlocked, on the
@@ -1259,11 +1620,9 @@ Tick = function()
     UpdateUnitVisibility(tracker)
 
     if tracker.casting then
-      -- UnitName is the strongest identity available in this event contract.
-      -- Changing or clearing the unit must not leave the previous one cast
-      -- visible at the new unit position.
-      local currentName = Call("UnitName", tracker.unit)
-      if currentName ~= tracker.caster then
+      -- Nampower casts keep GUID identity; stock combat text falls back to the
+      -- caster name carried in the localized message.
+      if not UnitMatchesCast(tracker, tracker) then
         StopUnitCast(tracker)
       else
         local unitElapsed = GetTime() - tracker.startTime
@@ -1284,6 +1643,9 @@ Tick = function()
   if type(U.RefreshNameplateTargetCast) == "function" then
     U.RefreshNameplateTargetCast()
   end
+  -- A plate cast that ran out without a Nampower end event drops the tick
+  -- back to its idle rate here.
+  if tickInterval == 0 and not AnyCastActive() then UpdateTickRate() end
 
   if not casting then
     if FinishTick(bar) then return end
@@ -2602,10 +2964,14 @@ function U.CastbarNativeDump()
   U.Print("castbar dump armed: cast something, or open a quest object")
 end
 
--- The combat-log reconstruction's events. Registered in both castbar modes,
--- because the target bar exists in both; the pet tracker, when it was built,
--- rides the same messages.
-local function RegisterUnitCastEvents()
+-- The shared tracker exposes two activation points. Exactly one small backend
+-- module calls one of them after this module builds the HUD/nameplate tracker:
+-- stock uses combat text, while Nampower adds GUID/spell-ID events and keeps
+-- the same combat-text registrations as a complete fallback.
+local targetBackend = "none"
+local targetEventsRegistered = false
+
+local function RegisterCombatTextTargetEvents()
   local i
   for i = 1, table.getn(TARGET_COMBAT_EVENTS) do
     U.RegisterEvent(TARGET_COMBAT_EVENTS[i], OnUnitCombatMessage)
@@ -2613,7 +2979,30 @@ local function RegisterUnitCastEvents()
 
   U.RegisterEvent("PLAYER_TARGET_CHANGED", function()
     StopUnitCast(trackers.target)
+    ReplayObservedCast(trackers.target)
   end)
+end
+
+function U.EnableStockTargetCastbarBackend()
+  if targetEventsRegistered then return false end
+  targetEventsRegistered = true
+  targetBackend = "stock"
+  RegisterCombatTextTargetEvents()
+  return true
+end
+
+function U.EnableNampowerTargetCastbarBackend()
+  if targetEventsRegistered or not U.hasNampower then return false end
+  targetEventsRegistered = true
+  targetBackend = "nampower"
+  RegisterCombatTextTargetEvents()
+  EnableNampowerEvents()
+  U.RegisterEvent("SPELL_START_OTHER", OnNampowerStart)
+  U.RegisterEvent("SPELL_GO_OTHER", OnNampowerGo)
+  U.RegisterEvent("SPELL_FAILED_OTHER", OnNampowerFailed)
+  U.RegisterEvent("SPELL_DELAYED_OTHER", OnNampowerDelayed)
+  U.RegisterEvent("UNIT_COMBAT_GUID", OnNampowerCombatGuid)
+  return true
 end
 
 function CB:OnEnable()
@@ -2640,7 +3029,6 @@ function CB:OnEnable()
     end
     BuildTargetBar()
     BuildTargetPatterns()
-    RegisterUnitCastEvents()
     castSize.RegisterPanel()
     UpdateTickRate()
     return
@@ -2650,7 +3038,6 @@ function CB:OnEnable()
   SuppressNativeCastbar()
   BuildTargetPatterns()
   RegisterPlayerCastEvents()
-  RegisterUnitCastEvents()
   castSize.RegisterPanel()
 
   -- modules/actionbar.lua announces every press just before it hands the slot
@@ -2700,9 +3087,30 @@ local function TrackerReport(tracker)
     unknown = tracker.unknown,
     lastUnknown = tracker.lastUnknown,
     lastEvent = tracker.lastEvent,
+    lastSource = tracker.lastSource,
+    estimated = tracker.estimated,
+    replayed = tracker.replayed,
+    guid = tracker.guid,
+    spellId = tracker.spellId,
+    kind = tracker.kind,
+    pushbacks = tracker.pushbacks,
     iconSource = tracker.iconSource,
     patterns = table.getn(targetStartPatterns),
     built = tracker.bar and true or false,
+  }
+end
+
+local function NampowerReport()
+  return {
+    available = U.hasNampower and true or false,
+    version = U.nampowerVersion,
+    backend = targetBackend,
+    cvarsEnabled = nampowerCvarsEnabled,
+    starts = nampowerStarts,
+    stops = nampowerStops,
+    failures = nampowerFailures,
+    interrupts = nampowerInterrupts,
+    pushbacks = nampowerPushbacks,
   }
 end
 
@@ -2727,6 +3135,7 @@ function U.CastbarReport()
       nativeAnchorCaptured = capturedNativeAnchor and true or false,
       target = TrackerReport(trackers.target),
       targetStyle = nativeTargetStyle,
+      nampower = NampowerReport(),
     }
   end
   if not bar then return nil end
@@ -2745,5 +3154,6 @@ function U.CastbarReport()
     target = TrackerReport(trackers.target),
     targetStyle = nativeTargetStyle,
     pet = TrackerReport(trackers.pet),
+    nampower = NampowerReport(),
   }
 end

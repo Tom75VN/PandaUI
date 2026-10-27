@@ -315,7 +315,11 @@ local function ApplyStoredPosition(entry)
   -- A placement stored on a larger screen or UI scale is pulled back inside
   -- this one (core/screenguard.lua). Applied only, not re-saved: going back to
   -- the larger screen restores the original placement.
-  position = U.ClampPositionToScreen(entry.frame, position)
+  local clamped
+  position, clamped = U.ClampPositionToScreen(entry.frame, position)
+  -- Remembered so the screen watch below can release the clamp again when the
+  -- UI scale goes back down.
+  entry.clamped = clamped and true or nil
 
   local applied = U.ApplyFramePoint(entry.frame, position)
   if not applied then
@@ -3892,6 +3896,56 @@ function U.ReapplyMoverPosition(frame)
   end
   return false
 end
+
+-- Screen watch. A larger UI scale shrinks UIParent in its own units, so a HUD
+-- anchor placed near an edge at a smaller scale ends up past that edge.
+-- UI_SCALE_CHANGED is not on this client (modules/gamesettings.lua polls for
+-- the same reason), so UIParent's effective scale and the screen size are
+-- read on a slow tick. On a change, every mover whose stored (or default)
+-- position now needs a clamp, or was clamped before, is re-applied through
+-- ApplyStoredPosition: clamped in, applied, never re-saved, so a smaller
+-- scale gives the original placement back.
+local screenWatch = { INTERVAL = 0.5, SCALE_EPSILON = 0.001, SIZE_EPSILON = 0.5 }
+
+function screenWatch.Changed(scale, width, height)
+  local last = screenWatch.last
+  return not last or
+         math.abs(scale - last.scale) > screenWatch.SCALE_EPSILON or
+         math.abs(width - last.width) > screenWatch.SIZE_EPSILON or
+         math.abs(height - last.height) > screenWatch.SIZE_EPSILON
+end
+
+function screenWatch.Tick()
+  local scale = Edge(UIParent, "GetEffectiveScale")
+  if not scale or scale <= 0 then return end
+  local width, height = U.UIWidth(), U.UIHeight()
+  if not screenWatch.Changed(scale, width, height) then return end
+
+  local first = not screenWatch.last
+  local i
+  -- A drag or a pending drop owns its frame; retry on the next tick.
+  if not first then
+    if pendingSnap then return end
+    for i = 1, table.getn(moverOrder) do
+      local entry = movers[moverOrder[i]]
+      if entry and entry.dragging then return end
+    end
+  end
+  screenWatch.last = { scale = scale, width = width, height = height }
+  -- Registration already clamped against the screen as it was then.
+  if first then return end
+
+  for i = 1, table.getn(moverOrder) do
+    local entry = movers[moverOrder[i]]
+    local position = entry and (U.GetPosition(entry.id) or entry.default)
+    if position then
+      local _, needed = U.ClampPositionToScreen(entry.frame, position)
+      if needed or entry.clamped then ApplyStoredPosition(entry) end
+    end
+  end
+end
+
+U.RegisterUpdate("mover.screenwatch", screenWatch.INTERVAL, screenWatch.Tick)
 
 function U.MoverCount()
   return table.getn(moverOrder)

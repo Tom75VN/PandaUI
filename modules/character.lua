@@ -2365,6 +2365,9 @@ function CH:OnEnable()
   -- the stock item slots.
   if U.ThemeStyleUsesNativeChrome() and not modernWowTabMode then
     if BuildClassicSlotBorders() then
+      if type(U.BuildClassicCharacterStats) == "function" then
+        U.BuildClassicCharacterStats(frame)
+      end
       U.MakeWindowDraggable("character", frame, {
         headerInset = 40,
         headerLevelOffset = 100,

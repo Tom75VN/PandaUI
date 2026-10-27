@@ -16,9 +16,9 @@
 --               private scanner (statsrc probe, 2026-09-28): melee crit from
 --               the Attack spell's tooltip, and each weapon's base Speed,
 --               which turns the live attack speed into a haste figure.
---   * estimated -- built from equipped items' tooltip text, learned talent
---               ranks and 1.12 class formulas. The panel marks every one with
---               a "?" whose hover says so. Buffs are never included.
+--   * calculated -- built from equipped-item, current-rank talent, buff and
+--               debuff tooltip text plus the same 1.12 class formulas as
+--               BetterCharacterStats. These values are displayed normally.
 --
 -- Tooltip text is read only through U.TooltipRegionText: this client leaves a
 -- hidden right-hand region holding the previous tooltip's text (statsrc run:
@@ -26,8 +26,8 @@
 -- Line colour is not usable (every line reported white), so an inactive set
 -- bonus is recognised by its "(n) Set:" prefix, not by its grey.
 --
--- Item and talent wording is matched in English only. On another client
--- language those parts of an estimate read as 0 and the "?" still warns.
+-- BetterCharacterStats' matching table is English-only, so this parity path
+-- intentionally has the same limitation on other client languages.
 --
 -- One top-level table (rules/pandaui.md, Lua local budget).
 
@@ -39,7 +39,7 @@ local CS = {
   -- Equipment slots whose tooltips can carry a bonus: head .. ranged. The
   -- ammo slot (0) and the tabard (19) never do.
   GEAR_FIRST = 1,
-  GEAR_LAST = 18,
+  GEAR_LAST = 19,
   SLOT_OFFHAND = 17,
   SLOT_RANGED = 18,
   MAX_SPELLS = 300,
@@ -75,24 +75,80 @@ local CS = {
                     ["Автоматическая стрельба"] = true, ["自动射击"] = true },
   SCHOOLS = { holy = true, fire = true, nature = true, frost = true,
               shadow = true, arcane = true },
+  SPELL_SCHOOLS = {
+    { "arcane", "CHARSTATS_SCHOOL_ARCANE" },
+    { "fire", "CHARSTATS_SCHOOL_FIRE" },
+    { "frost", "CHARSTATS_SCHOOL_FROST" },
+    { "holy", "CHARSTATS_SCHOOL_HOLY" },
+    { "nature", "CHARSTATS_SCHOOL_NATURE" },
+    { "shadow", "CHARSTATS_SCHOOL_SHADOW" },
+  },
+  -- BetterCharacterStats' six selectable native pages. The Modern and
+  -- Modern WoW panels list the same values as continuous categories; the
+  -- Classic panel uses these definitions for its two dropdown columns.
+  PAGES = {
+    { key = "base", title = "CHARSTATS_PAGE_BASE",
+      rows = { "CHARSTATS_STR", "CHARSTATS_AGI", "CHARSTATS_STA",
+               "CHARSTATS_INT", "CHARSTATS_SPI", "CHARSTATS_ARMOR" } },
+    { key = "melee", title = "CHARSTATS_CAT_MELEE",
+      rows = { "CHARSTATS_SKILL", "CHARSTATS_DAMAGE", "CHARSTATS_SPEED",
+               "CHARSTATS_AP", "CHARSTATS_HIT", "CHARSTATS_CRIT" } },
+    { key = "ranged", title = "CHARSTATS_CAT_RANGED",
+      rows = { "CHARSTATS_SKILL", "CHARSTATS_DAMAGE", "CHARSTATS_SPEED",
+               "CHARSTATS_AP", "CHARSTATS_HIT", "CHARSTATS_CRIT" } },
+    { key = "spell", title = "CHARSTATS_CAT_SPELL",
+      rows = { "CHARSTATS_SPELL_DAMAGE", "CHARSTATS_SPELL_HIT",
+               "CHARSTATS_SPELL_CRIT", "CHARSTATS_HEALING",
+               "CHARSTATS_REGEN", "CHARSTATS_SPELL_HASTE" } },
+    { key = "schools", title = "CHARSTATS_CAT_SCHOOLS",
+      rows = { "CHARSTATS_SCHOOL_ARCANE", "CHARSTATS_SCHOOL_FIRE",
+               "CHARSTATS_SCHOOL_FROST", "CHARSTATS_SCHOOL_HOLY",
+               "CHARSTATS_SCHOOL_NATURE", "CHARSTATS_SCHOOL_SHADOW" } },
+    { key = "defense", title = "CHARSTATS_CAT_DEFENSE",
+      rows = { "CHARSTATS_ARMOR", "CHARSTATS_DEFENSE", "CHARSTATS_DODGE",
+               "CHARSTATS_PARRY", "CHARSTATS_BLOCK",
+               "CHARSTATS_AVOIDANCE" } },
+  },
   -- 1.12 item wording, lower-cased, most specific first; one match per line.
-  -- `both` feeds spell damage and healing, `school` a single school's damage.
+  -- `both` is shared spell damage/healing, `school` one school's damage.
   GEAR_PATTERNS = {
     { "increases damage and healing done by magical spells and effects by up to (%d+)", "both" },
     { "increases healing done by spells and effects by up to (%d+)", "healing" },
     { "increases damage done by (%a+) spells and effects by up to (%d+)", "school" },
     { "healing and spell damage %+(%d+)", "both" },
+    { "spell damage %+(%d+)", "both" },
+    { "^%+(%d+) spell power", "both" },
     { "%+(%d+) damage and healing spells", "both" },
     { "%+(%d+) spell damage and healing", "both" },
+    { "increases damage done by magical spells and effects by up to (%d+)", "damageOnly" },
     { "%+(%d+) healing spells", "healing" },
+    { "healing spells %+(%d+)", "healing" },
+    { "healing %+(%d+)", "healing" },
     { "%+(%d+) (%a+) spell damage", "school" },
+    { "(%a+) damage %+(%d+)", "school" },
     { "improves your chance to hit with spells by (%d+)%%", "spellHit" },
+    { "spell hit %+(%d+)", "spellHit" },
     { "improves your chance to get a critical strike with spells by (%d+)%%", "spellCrit" },
+    { "(%d+)%% spell critical strike", "spellCrit" },
     { "improves your chance to hit by (%d+)%%", "hit" },
+    { "%+(%d+)%% ranged hit", "rangedHit" },
+    { "chance to get a critical strike with missile weapons by (%d+)%%", "rangedCrit" },
+    { "%+(%d+)%% ranged crit", "rangedCrit" },
+    { "%+(%d+)%% critical strike", "rangedCrit" },
+    { "chance to get a critical strike by (%d+)%%", "crit" },
     { "restores (%d+) mana per 5 sec", "mp5" },
     { "%+(%d+) mana every 5 sec", "mp5" },
     { "mana regen (%d+) per 5 sec", "mp5" },
+    { "allows (%d+)%% of your mana regeneration to continue while casting", "casting" },
+    { "increases your attack and casting speed by (%d+)%%", "haste" },
+    { "increases your casting speed by (%d+)%%", "spellHaste" },
+    { "^%+(%d+)%% haste", "haste" },
+    { "^attack speed %+(%d+)%%", "haste" },
+    { "increases the block value of your shield by (%d+)", "blockValue" },
+    { "block value %+(%d+)", "blockValue" },
+    { "^(%d+) block$", "blockValue" },
     { "decreases the magical resistances of your spell targets by (%d+)", "spellPen" },
+    { "%+(%d+) spell penetration", "spellPen" },
   },
   -- Item bonuses that only decide a row's colour (CS.GearColor): a value is
   -- green when an equipped item's own bonus line -- stat suffix, enchant,
@@ -118,6 +174,13 @@ local CS = {
     { "chance to parry an attack by (%d+)%%", "parry" },
     { "chance to block attacks with a shield by (%d+)%%", "block" },
     { "chance to get a critical strike by (%d+)%%", "crit" },
+    { "increases your attack and casting speed by (%d+)%%", "haste" },
+    { "increases your casting speed by (%d+)%%", "spellHaste" },
+    { "^%+(%d+)%% haste", "haste" },
+    { "^attack speed %+(%d+)%%", "haste" },
+    { "increases the block value of your shield by (%d+)", "blockValue" },
+    { "block value %+(%d+)", "blockValue" },
+    { "^(%d+) block$", "blockValue" },
     { "^equip: increased [%a%- ]+ %+(%d+)", "skill", ["not"] = "defense" },
     { "%+(%d+) weapon damage", "damage" },
     { "^%+(%d+) damage%.?$", "damage" },
@@ -129,57 +192,26 @@ local CS = {
     { "%+(%d+) frost resistance", "res_frost" },
     { "%+(%d+) shadow resistance", "res_shadow" },
   },
-  -- Talent effects per rank, by the talent's English name (GetTalentInfo).
-  -- `hit` melee, `rangedHit`, `spellHit` and `spellCrit` apply to every
-  -- attack or spell; `spellHitNote` / `spellCritNote` only to some, so they
-  -- are listed in the "?" breakdown and not added; `castRegen` is the share of
-  -- Spirit regeneration kept while casting. `ranks` overrides `per`.
-  TALENTS = {
-    ROGUE = {
-      { name = "Precision", hit = 1 },
-    },
-    HUNTER = {
-      { name = "Surefooted", hit = 1, rangedHit = 1 },
-    },
-    SHAMAN = {
-      { name = "Nature's Guidance", hit = 1, spellHit = 1 },
-      { name = "Call of Thunder", spellCritNote = { 1, 2, 3, 4, 6 } },
-      { name = "Tidal Mastery", spellCritNote = 1 },
-    },
-    MAGE = {
-      { name = "Arcane Instability", spellCrit = 1 },
-      { name = "Critical Mass", spellCritNote = 2 },
-      { name = "Elemental Precision", spellHitNote = 2 },
-      { name = "Arcane Focus", spellHitNote = 2 },
-      { name = "Arcane Meditation", castRegen = 5 },
-    },
-    PRIEST = {
-      { name = "Holy Specialization", spellCritNote = 1 },
-      { name = "Force of Will", spellCritNote = 1 },
-      { name = "Shadow Focus", spellHitNote = 2 },
-      { name = "Meditation", castRegen = 5 },
-    },
-    WARLOCK = {
-      { name = "Devastation", spellCritNote = 1 },
-      { name = "Suppression", spellHitNote = 2 },
-    },
-    PALADIN = {
-      { name = "Holy Power", spellCritNote = 1 },
-    },
-    DRUID = {
-      { name = "Reflection", castRegen = 5 },
-    },
-  },
-  -- 1.12 spell crit: a class base plus one percent per `int` Intellect at
-  -- level 60. Below 60 the ratio is scaled with level, which is only an
-  -- approximation -- hence an estimate.
+  -- BetterCharacterStats' vMaNGOS spell-crit curves: class base plus
+  -- Intellect divided by a level-adjusted coefficient.
   SPELL_CRIT = {
-    MAGE = { base = 0.2, int = 59.5 },
-    PRIEST = { base = 0.8, int = 59.2 },
-    WARLOCK = { base = 1.7, int = 60.6 },
-    DRUID = { base = 1.8, int = 60 },
-    SHAMAN = { base = 2.3, int = 59.2 },
-    PALADIN = { base = 0, int = 54 },
+    MAGE = { base = 3.70, coefficient = 14.77, level = 0.65 },
+    WARLOCK = { base = 3.18, coefficient = 11.30, level = 0.82 },
+    PRIEST = { base = 2.97, coefficient = 10.03, level = 0.82 },
+    DRUID = { base = 3.33, coefficient = 12.41, level = 0.79 },
+    SHAMAN = { base = 3.54, coefficient = 11.51, level = 0.80 },
+    PALADIN = { base = 3.70, coefficient = 14.77, level = 0.65 },
+  },
+  -- Agility needed for one percent ranged crit, interpolated from level 1 to
+  -- 60 as BetterCharacterStats does. Classes without a ranged weapon attack
+  -- do not need an entry.
+  RANGED_CRIT = {
+    MAGE = { first = 12.9, last = 20, base = 3.2 },
+    ROGUE = { first = 2.2, last = 29, base = 0 },
+    HUNTER = { first = 3.5, last = 53, base = 0 },
+    PRIEST = { first = 11, last = 20, base = 3 },
+    WARLOCK = { first = 8.4, last = 20, base = 2 },
+    WARRIOR = { first = 3.9, last = 20, base = 0 },
   },
   -- 1.12 Spirit regeneration per 2-second tick: `base` + Spirit / `div`.
   SPIRIT_REGEN = {
@@ -193,10 +225,143 @@ local CS = {
   gear = nil,
   talentKey = nil,
   talents = nil,
+  talentSpecial = nil,
+  auras = nil,
+  auraNames = nil,
+  aurasDirty = true,
   meleeSpell = nil,
   rangedSpell = nil,
 }
 U.CharacterStats = CS
+
+-- BetterCharacterStats reads the current-rank talent descriptions instead of
+-- relying on talent names. Turtle WoW can therefore change a talent tree
+-- without requiring a hard-coded rank table here.
+CS.TALENT_PATTERNS = {
+  { "Increases your chance to hit with melee weapons by (%d)%%%.", { hit = 1 } },
+  { "Increases hit chance by (%d+)%%, and by an additional (%d+)%% while dual wielding", { hit = 1, surefooted = 2 } },
+  { "Also increases chance to hit with melee attacks and spells by (%d+)%%%.", { hit = 1, spellHit = 1 } },
+  { "Increases your chance to hit with melee attacks and spells by (%d+)%%%.", { hit = 1, spellHit = 1 } },
+  { "Increases your chance to hit with spells and melee attacks by (%d+)%%", { hit = 1, spellHit = 1 } },
+  { "Reduces the chance that the opponent can resist your Frost and Fire spells by (%d)%%%.", { spellHitFire = 1, spellHitFrost = 1 } },
+  { "Reduces the chance that the opponent can resist your Arcane spells by (%d+)%%%.", { spellHitArcane = 1 } },
+  { "Reduces the chance for enemies to resist your Holy and Discipline spells by (%d+)%%%.", { spellHitHoly = 1 } },
+  { "Reduces your target's chance to resist your Shadow spells by (%d+)%%%.", { spellHitShadow = 1 } },
+  { "Reduces the chance for enemies to resist your Affliction spells by (%d+)%%%.", { spellHitShadow = 1 } },
+  { "Increases your critical strike chance with ranged weapons by (%d)%%%.", { rangedCrit = 1 } },
+  { "Increases your critical strike chance with all attacks by (%d)%%%.", { rangedCrit = 1 } },
+  { "Increases your spell damage and critical srike chance by (%d+)%%%.", { spellCrit = 1 } },
+  { "Allows (%d+)%% of your Mana regeneration to continue while casting%.", { casting = 1, waterShieldRank = "rank" } },
+  { "Increases your total intellect by %d+%% and your spell casting speed by (%d+)%%", { spellHaste = 1 } },
+  { "Zeal increases your attack and casting speed by an additional (%d+)%% per stack", { vengefulStrikes = 1 } },
+  { "Increases your melee attack speed by (%d+)%%", { haste = 1 } },
+  { "Causes your attacks to ignore (%d+) of your target's Armor per level", { armorPenPerLevel = 1 } },
+  { "Increases spell damage and healing by up to (%d+)%% of your total Spirit%.", { spiritualGuidance = 1 } },
+  { "Increases the effects of your Inner Fire spell by (%d+)%%%.", { improvedInnerFire = 1 } },
+  { "Increases healing done by spells and effects by up to (%d+)%% of your Armor from items", { ironclad = 1 } },
+  { "Increases your armor value from items by (%d+)%%%.", { toughness = 1 } },
+  { "increases block amount by (%d+)%%", { enhancingTotems = 1 } },
+  { "amount of damage absorbed by your shield by (%d+)%%", { blockMod = 1 } },
+  { "increases the amount blocked by (%d+)%%", { blockMod = 1 } },
+}
+
+-- Class-specific spell critical bonuses are tooltip-only details in the
+-- reference addon. Some of them also change its primary displayed value.
+CS.TALENT_CRIT_PATTERNS = {
+  PALADIN = {
+    { "Increases the critical effect chance of your Holy Light and Flash of Light by (%d+)%%%.", { paladinHoly = 1, paladinFlash = 1 } },
+    { "Improves your chance to get a critical strike with Holy Shock by (%d+)%%%.", { paladinShock = 1 } },
+  },
+  DRUID = {
+    { "Increases the damage and critical strike chance of your Moonfire spell by (%d+)%%%.", { druidMoonfire = 1 } },
+    { "Increases the critical effect chance of your Regrowth spell by (%d+)%%%.", { druidRegrowth = 1 } },
+  },
+  WARLOCK = {
+    { "Increases the critical strike chance of your Destruction spells by (%d+)%%%.", { warlockDestruction = 1, warlockSearing = 1 } },
+    { "Increases the critical strike chance of your Searing Pain spell by (%d+)%%%.", { warlockSearing = 1 } },
+  },
+  MAGE = {
+    { "Increases the critical strike chance of your Arcane Explosion and Arcane Missiles spells by an additional (%d+)%%%.", { mageArcane = 1 } },
+    { "Increases the critical strike chance of your Fire Blast and Scorch spells by (%d+)%%%.", { mageFireBlast = 1, mageScorch = 1 } },
+    { "Increases the critical strike chance of your Flamestrike spell by (%d+)%%%.", { mageFlamestrike = 1 } },
+    { "Increases the critical strike chance of your Fire spells by (%d+)%%%.", { mageFire = 1, mageFireBlast = 1, mageScorch = 1, mageFlamestrike = 1 } },
+    { "Increases the critical strike chance of all your spells against frozen targets by (%d+)%%%.", { mageShatter = 1 } },
+  },
+  PRIEST = {
+    { "Increases the critical effect chance of your Holy and Discipline spells by (%d+)%%%.", { priestHoly = 1, priestDiscipline = 1 } },
+    { "Increases your spell damage and the critical strike chance of your offensive spells by (%d+)%%", { priestOffensive = 1 } },
+  },
+  SHAMAN = {
+    { "Increases the critical strike chance of your Lightning Bolt and Chain Lightning spells by an additional (%d+)%%%.", { shamanLightningBolt = 1, shamanChainLightning = 1 } },
+    { "Increases the critical effect chance of your healing and lightning spells by (%d+)%%%.", { shamanLightningBolt = 1, shamanChainLightning = 1, shamanLightningShield = 1, shamanHealing = 1 } },
+  },
+}
+
+CS.AURA_PATTERNS = {
+  { "Chance to hit increased by (%d)%%%.", { hit = 1 } },
+  { "Improves your chance to hit by (%d+)%%%.", { hit = 1 } },
+  { "Increases attack power by %d+ and chance to hit by (%d+)%%%.", { hit = 1 } },
+  { "Spell hit chance increased by (%d+)%%%.", { spellHit = 1 } },
+  { "Increases your chance to hit with spells by (%d+)%%", { spellHit = 1 } },
+  { "Agility increased by 25, Critical hit chance increases by (%d)%%%.", { rangedCrit = 1 } },
+  { "Increases chance for a melee, ranged, or spell critical by (%d+)%% and all attributes by %d+%.", { rangedCrit = 1, spellCrit = 1 } },
+  { "Critical strike chance increased by (%d+)%%%.", { rangedCrit = 1 } },
+  { "Increases ranged and melee critical chance by (%d+)%%%.", { rangedCrit = 1 } },
+  { "Chance for a critical hit with a spell increased by (%d+)%%%.", { spellCrit = 1 } },
+  { "Increases spell critical chance by (%d)%%%.", { spellCrit = 1 } },
+  { "Chance to get a critical strike with spells is increased by (%d+)%%", { spellCrit = 1 } },
+  { "Critical strike chance with spells and melee attacks increased by (%d+)%%%.", { spellCrit = 1 } },
+  { "Magical damage dealt is increased by up to (%d+)%.", { damageOnly = 1 } },
+  { "Increases damage and healing done by magical spells and effects by up to (%d+)", { spellDamage = 1 } },
+  { "Your damage and healing done by magical spells and effects is increased by up to (%d+)", { spellDamage = 1 } },
+  { "Spell damage and healing increased by up to (%d+)", { spellDamage = 1 } },
+  { "Magical damage dealt by spells and abilities is increased by up to (%d+)", { damageOnly = 1 } },
+  { "Spell damage is increased by up to (%d+)", { damageOnly = 1 } },
+  { "Spell damage increased by up to (%d+)", { damageOnly = 1 } },
+  { "Spell Damage increased by (%d+)", { damageOnly = 1 } },
+  { "Increased damage done by magical spells and effects by (%d+)%.", { innerFire = 1 } },
+  { "Arcane damage dealt by spells and abilities is increased by up to (%d+)", { arcane = 1 } },
+  { "Fire damage dealt by spells and abilities is increased by up to (%d+)", { fire = 1 } },
+  { "Frost damage dealt by spells and abilities is increased by up to (%d+)", { frost = 1 } },
+  { "Holy damage dealt by spells and abilities is increased by up to (%d+)", { holy = 1 } },
+  { "Nature damage dealt by spells and abilities is increased by up to (%d+)", { nature = 1 } },
+  { "Shadow damage dealt by spells and abilities is increased by up to (%d+)", { shadow = 1 } },
+  { "Healing done by magical spells is increased by up to (%d+)%.", { healing = 1 } },
+  { "Increases healing done by magical spells by up to (%d+) for 3600 sec%.", { healing = 1 } },
+  { "Healing increased by up to (%d+)%.", { healing = 1 } },
+  { "Healing spells increased by up to (%d+)%.", { healing = 1 } },
+  { "Increases healing done by magical spells and effects by up to (%d+)%.", { healing = 1 } },
+  { "Healing done is increased by up to (%d+)", { healing = 1 } },
+  { "Healing Bonus increased by (%d+)", { healing = 1 } },
+  { "Restores (%d+) mana per 5 sec%.", { mp5 = 1 } },
+  { "Regenerating (%d+) Mana every 5 seconds%.", { mp5Tick = 1 } },
+  { "Regenerate (%d+) mana per 5 sec%.", { mp5 = 1 } },
+  { "Mana Regeneration increased by (%d+) every 5 seconds%.", { mp5Tick = 1 } },
+  { "Restores (%d+) mana every 1 sec%.", { mp1 = 1 } },
+  { "Restores (%d+) mana per 5 seconds%.", { mp5 = 1 } },
+  { "(%d+)%% of your Mana regeneration continuing while casting%.", { casting = 1 } },
+  { "(%d+)%% of your mana regeneration to continue while casting%.", { casting = 1 } },
+  { "Allows (%d+)%% of mana regeneration while casting%.", { casting = 1 } },
+  { "continue (%d+)%% of their Mana regeneration", { casting = 1 } },
+  { "^Increases attack speed by (%d+)%% and spell casting speed by (%d+)%%", { haste = 1 } },
+  { "^Increases attack and spell casting speed by (%d+)%%", { haste = 1 } },
+  { "increases casting speed by (%d+)%%", { spellHaste = 1 } },
+  { "^Increases casting and attack speed by (%d+)%%", { haste = 1 } },
+  { "^Increases attack and casting speed by (%d+)%%", { haste = 1 } },
+  { "^Casting speed increased by (%d+)%%", { spellHaste = 1 } },
+  { "^Attack and casting speed increased by (%d+)%%", { zealHaste = 1 } },
+  { "^Increases your attack and casting speed by (%d+)%%", { haste = 1 } },
+  { "^Ignore (%d+) of enemies' armor", { armorPen = 1 } },
+  { "^Current target's armor is reduced by (%d+)", { armorPen = 1 } },
+  { "Block value increased by (%d+)", { blockValue = 1 } },
+  { "Block Value increased by (%d+)", { blockValue = 1 } },
+}
+
+CS.DEBUFF_PATTERNS = {
+  { "Chance to hit reduced by (%d+)%%%.", { hitDebuff = 1 } },
+  { "Chance to hit decreased by (%d+)%% and %d+ Nature damage every %d+ sec%.", { hitDebuff = 1 } },
+  { "Spell critical%-hit chance reduced by (%d+)%%%.", { spellCritDebuff = 1 } },
+}
 
 -- ---------------------------------------------------------------------------
 -- Guarded client reads
@@ -209,6 +374,34 @@ end
 
 function CS.Number(value)
   return tonumber(value) or 0
+end
+
+function CS.AddValue(target, key, value)
+  value = CS.Number(value)
+  if value ~= 0 then target[key] = (target[key] or 0) + value end
+end
+
+-- Applies a BetterCharacterStats-style tooltip pattern. A field maps to one
+-- of the pattern's captures; "rank" stores the learned talent rank instead.
+function CS.ApplyPattern(target, text, entry, rank)
+  local _, _, a, b, c, d = string.find(text, entry[1])
+  if not a then return false end
+  local values = { a, b, c, d }
+  local key, source
+  for key, source in pairs(entry[2]) do
+    local value = source == "rank" and rank or values[source]
+    CS.AddValue(target, key, value)
+  end
+  return true
+end
+
+function CS.ApplyPatterns(target, text, patterns, rank)
+  local found = false
+  local i
+  for i = 1, table.getn(patterns) do
+    if CS.ApplyPattern(target, text, patterns[i], rank) then found = true end
+  end
+  return found
 end
 
 function CS.Scanner()
@@ -273,6 +466,14 @@ function CS.GearKey()
     local id, link = CS.ItemId(slot)
     table.insert(parts, link or "-")
   end
+  local enchant = U.G("GetWeaponEnchantInfo")
+  if type(enchant) == "function" then
+    local ok, main, _, mainCharges, off, _, offCharges = pcall(enchant)
+    if ok then
+      table.insert(parts, table.concat({ tostring(main), tostring(mainCharges),
+                                         tostring(off), tostring(offCharges) }, ":"))
+    end
+  end
   return table.concat(parts, "|")
 end
 
@@ -302,14 +503,107 @@ function CS.AddGearBonus(totals, line, slot)
   end
 end
 
-function CS.AddGearLine(totals, text, slot)
+function CS.AddSetBonus(totals, line, setName, seen)
+  if not setName or not string.find(line, "^set:") then return end
+  local patterns = {
+    { "^set: improves your chance to hit by (%d)%%", "hit" },
+    { "^set: improves your chance to hit with spells by (%d)%%", "spellHit" },
+    { "^set: improves your chance to get a critical strike by (%d)%%", "rangedCrit" },
+    { "^set: improves your chance to get a critical strike with spells by (%d)%%", "spellCrit" },
+    { "^set: increases damage and healing done by magical spells and effects by up to (%d+)", "spellDamage" },
+    { "^set: increases healing done by spells and effects by up to (%d+)", "healing" },
+    { "^set: allows (%d+)%% of your mana regeneration to continue while casting", "casting" },
+    { "^set: restores (%d+) mana per 5 sec", "mp5" },
+    { "^set: increases your attack and casting speed by (%d+)%%", "haste" },
+    { "^set: your attacks ignore (%d+) of the target's armor", "armorPen" },
+    { "^set: decreases the magical resistances of your spell targets by (%d+)", "spellPen" },
+    { "^set: increases the block value of your shield by (%d+)", "blockValue" },
+    { "^set: improves your chance to get a critical strike with holy spells by (%d)%%", "priestHoly" },
+    { "^set: increases your chance of a critical hit with prayer of healing by (%d+)%%", "priestPrayer" },
+  }
+  local i
+  for i = 1, table.getn(patterns) do
+    local _, _, amount = string.find(line, patterns[i][1])
+    if amount then
+      local token = setName .. ":" .. patterns[i][2]
+      if not seen[token] then
+        seen[token] = true
+        CS.AddValue(totals, patterns[i][2], amount)
+      end
+    end
+  end
+end
+
+function CS.AddGearSpecial(totals, line, slot)
+  local _, _, amount, second
+  _, _, amount = string.find(line, "improves your chance to hit and get a critical strike with spells by (%d+)%%")
+  if amount then
+    CS.AddValue(totals, "spellHit", amount)
+    CS.AddValue(totals, "spellCrit", amount)
+    return true
+  end
+  _, _, amount = string.find(line, "improves your chance to hit with spells and attacks by (%d+)%%")
+  if amount then
+    CS.AddValue(totals, "hit", amount)
+    CS.AddValue(totals, "spellHit", amount)
+    return true
+  end
+  _, _, amount, second = string.find(line, "increases your spell damage by up to (%d+) and your healing by up to (%d+)")
+  if amount then
+    CS.AddValue(totals, "damageOnly", amount)
+    CS.AddValue(totals, "healing", second)
+    return true
+  end
+  _, _, amount, second = string.find(line, "^healing %+(%d+) and (%d+) mana per 5 sec")
+  if amount then
+    CS.AddValue(totals, "healing", amount)
+    CS.AddValue(totals, "mp5", second)
+    return true
+  end
+  if string.find(line, "^brilliant wizard oil") then
+    CS.AddValue(totals, "spellDamage", 36)
+    CS.AddValue(totals, "spellCrit", 1)
+    return true
+  elseif string.find(line, "^lesser wizard oil") then
+    CS.AddValue(totals, "spellDamage", 16)
+    return true
+  elseif string.find(line, "^minor wizard oil") then
+    CS.AddValue(totals, "spellDamage", 8)
+    return true
+  elseif string.find(line, "^wizard oil") then
+    CS.AddValue(totals, "spellDamage", 24)
+    return true
+  elseif string.find(line, "^brilliant mana oil") then
+    CS.AddValue(totals, "healing", 25)
+    CS.AddValue(totals, "mp5", 12)
+    return true
+  elseif string.find(line, "^lesser mana oil") then
+    CS.AddValue(totals, "mp5", 8)
+    return true
+  elseif string.find(line, "^minor mana oil") then
+    CS.AddValue(totals, "mp5", 4)
+    return true
+  end
+  _, _, amount = string.find(line, "^equip: your attacks ignore (%d+) of the target's armor")
+  if amount then CS.AddValue(totals, "armorPen", amount); return true end
+  return false
+end
+
+function CS.AddGearLine(totals, text, slot, setName, setSeen)
   local line = string.lower(text)
+  local _, _, foundSet = string.find(line, "(.+) %(%d+/%d+%)")
+  if foundSet then setName = foundSet end
   -- On-use and proc effects are not standing bonuses, and "(3) Set:" is a
   -- set bonus the player has not completed.
   if string.find(line, "^use:") or string.find(line, "^chance on hit:")
      or string.find(line, "^%(%d+%)") then
-    return
+    return setName
   end
+  if string.find(line, "restores %d+ mana per 5 sec") and
+     string.find(line, "to all party members", 1, true) then return setName end
+  CS.AddSetBonus(totals, line, setName, setSeen or {})
+  if string.find(line, "^set:") then return setName end
+  if CS.AddGearSpecial(totals, line, slot) then return setName end
   CS.AddGearBonus(totals, line, slot)
   local i
   for i = 1, table.getn(CS.GEAR_PATTERNS) do
@@ -326,13 +620,13 @@ function CS.AddGearLine(totals, text, slot)
         end
       elseif kind == "both" then
         totals.spellDamage = totals.spellDamage + CS.Number(a)
-        totals.healing = totals.healing + CS.Number(a)
       else
         totals[kind] = totals[kind] + CS.Number(a)
       end
-      return
+      return setName
     end
   end
+  return setName
 end
 
 -- Weapon base speed: the one shown right-hand text holding a decimal number
@@ -352,9 +646,15 @@ end
 function CS.ScanGear()
   local key = CS.GearKey()
   if CS.gear and key == CS.gearKey then return CS.gear end
-  local totals = { spellDamage = 0, healing = 0, spellHit = 0, spellCrit = 0,
-                   hit = 0, mp5 = 0, spellPen = 0, school = {}, speed = {},
+  local totals = { spellDamage = 0, damageOnly = 0, healing = 0,
+                   spellHit = 0, spellCrit = 0,
+                   hit = 0, rangedHit = 0, crit = 0, rangedCrit = 0,
+                   mp5 = 0, casting = 0, spellPen = 0, haste = 0,
+                   spellHaste = 0, blockValue = 0, armorPen = 0,
+                   priestHoly = 0, priestPrayer = 0,
+                   school = {}, speed = {},
                    bonus = {} }
+  local setSeen = {}
   local slot
   for slot = CS.GEAR_FIRST, CS.GEAR_LAST do
     if CS.ItemId(slot) then
@@ -362,9 +662,11 @@ function CS.ScanGear()
         tip:SetInventoryItem("player", slot)
       end)
       if left then
-        local i
+        local i, setName
         for i = 1, count do
-          if left[i] then CS.AddGearLine(totals, left[i], slot) end
+          if left[i] then
+            setName = CS.AddGearLine(totals, left[i], slot, setName, setSeen)
+          end
         end
         totals.speed[slot] = CS.WeaponSpeed(right, count)
       end
@@ -381,19 +683,32 @@ function CS.TalentKey()
   local parts = {}
   local okTabs, tabs = CS.Call("GetNumTalentTabs")
   tabs = okTabs and tonumber(tabs) or 0
-  local tab
+  local tab, index
   for tab = 1, tabs do
-    local ok, _, _, spent = CS.Call("GetTalentTabInfo", tab)
-    table.insert(parts, ok and tostring(spent) or "?")
+    local okCount, count = CS.Call("GetNumTalents", tab)
+    count = okCount and tonumber(count) or 0
+    for index = 1, count do
+      local ok, _, _, _, _, rank = CS.Call("GetTalentInfo", tab, index)
+      table.insert(parts, ok and tostring(rank) or "?")
+    end
   end
   return table.concat(parts, "/")
 end
 
--- name -> learned rank for every talent of the player's class.
+function CS.AddTalentLine(totals, text, rank, class)
+  CS.ApplyPatterns(totals, text, CS.TALENT_PATTERNS, rank)
+  local patterns = CS.TALENT_CRIT_PATTERNS[class]
+  if patterns then CS.ApplyPatterns(totals, text, patterns, rank) end
+end
+
+-- Reads the current-rank text of every learned talent, matching the exact
+-- BetterCharacterStats sources rather than a shortened name list.
 function CS.ReadTalents()
   local key = CS.TalentKey()
   if CS.talents and key == CS.talentKey then return CS.talents end
-  local ranks = {}
+  local totals = {}
+  local okClass, _, class = CS.Call("UnitClass", "player")
+  class = okClass and class or ""
   local okTabs, tabs = CS.Call("GetNumTalentTabs")
   tabs = okTabs and tonumber(tabs) or 0
   local tab, index
@@ -401,37 +716,186 @@ function CS.ReadTalents()
     local okCount, count = CS.Call("GetNumTalents", tab)
     count = okCount and tonumber(count) or 0
     for index = 1, count do
-      local ok, name, _, _, _, rank = CS.Call("GetTalentInfo", tab, index)
-      if ok and name then ranks[name] = tonumber(rank) or 0 end
+      local ok, _, _, _, _, rank = CS.Call("GetTalentInfo", tab, index)
+      rank = ok and tonumber(rank) or 0
+      if rank > 0 then
+        local left, _, lines = CS.ScanLines(function(tip)
+          tip:SetTalent(tab, index)
+        end)
+        if left then
+          local line
+          for line = 1, lines do
+            local text = left[line]
+            if text == U.G("TOOLTIP_TALENT_NEXT_RANK") then break end
+            if text then CS.AddTalentLine(totals, text, rank, class) end
+          end
+        end
+      end
     end
   end
-  CS.talentKey, CS.talents = key, ranks
-  return ranks
+  CS.talentKey, CS.talents, CS.talentSpecial = key, totals, totals
+  return totals
 end
 
-function CS.TalentValue(effect, rank)
-  if type(effect) == "table" then return effect[rank] or 0 end
-  return (tonumber(effect) or 0) * rank
-end
-
--- Sums one effect over the class's learned talents. `notes` collects the
--- talent name and value of every contributing talent for the "?" breakdown.
 function CS.TalentSum(class, field, notes)
-  local list = CS.TALENTS[class]
-  if not list then return 0 end
-  local ranks = CS.ReadTalents()
-  local total = 0
-  local i
-  for i = 1, table.getn(list) do
-    local talent = list[i]
-    local rank = ranks[talent.name] or 0
-    if talent[field] and rank > 0 then
-      local value = CS.TalentValue(talent[field], rank)
-      total = total + value
-      if notes then table.insert(notes, { talent.name, value }) end
+  local totals = CS.ReadTalents()
+  local map = {
+    hit = "hit", rangedHit = "hit", rangedCrit = "rangedCrit",
+    spellHit = "spellHit", spellCrit = "spellCrit",
+    castRegen = "casting", spellHaste = "spellHaste",
+  }
+  local key = map[field] or field
+  return totals[key] or 0
+end
+
+-- ---------------------------------------------------------------------------
+-- Active buffs and debuffs
+-- ---------------------------------------------------------------------------
+function CS.AddAuraLine(totals, names, text, harmful, state, class)
+  names[text] = (names[text] or 0) + 1
+  if harmful then
+    CS.ApplyPatterns(totals, text, CS.DEBUFF_PATTERNS)
+    if string.find(text, "Lowered chance to hit%.") then
+      CS.AddValue(totals, "hitDebuff", 25)
+    end
+    return
+  end
+
+  CS.ApplyPatterns(totals, text, CS.AURA_PATTERNS)
+  local _, _, regen, casting = string.find(text,
+    "Mana regeneration increased by (%d+)%%%.[ ]+[ ]?(%d+)%% Mana regeneration may continue while casting%.")
+  if regen then
+    CS.AddValue(totals, "manaRegenPercent", regen)
+    CS.AddValue(totals, "casting", casting)
+  end
+  if string.find(text, "Inner Focus", 1, true) then
+    CS.AddValue(totals, "spellCrit", 25)
+  end
+  if string.find(text, "While active, target's critical hit chance with spells and attacks increases by 10%%%.") then
+    CS.AddValue(totals, "spellCrit", 10)
+  end
+  if string.find(text, "Increases critical chance of spells by 10%%, melee and ranged by 5%% and grants 140 attack power%. 120 minute duration%.") then
+    CS.AddValue(totals, "rangedCrit", 5)
+    CS.AddValue(totals, "spellCrit", 10)
+  end
+  if string.find(text, "Increases hitpoints by 300%. 15%% haste to melee attacks%. %d+ mana regen every 5 seconds%.") then
+    CS.AddValue(totals, "mp5", 10)
+  end
+  if class == "WARLOCK" then
+    local _, _, amount = string.find(text, "Increases critical strike chance of Fire spells by (%d+)%%")
+    CS.AddValue(totals, "warlockFire", amount)
+  elseif class == "MAGE" then
+    local _, _, amount = string.find(text, "Increases critical strike chance from Fire damage spells by (%d+)%%%.")
+    CS.AddValue(totals, "mageFire", amount)
+  elseif class == "SHAMAN" and string.find(text, "Elemental Mastery", 1, true) then
+    totals.shamanElementalMastery = 1
+  end
+end
+
+function CS.HasAura(pattern, harmful)
+  local names = CS.auraNames
+  if not names then return false end
+  local text
+  for text in pairs(names) do
+    if (not harmful or string.find(text, "@harmful@", 1, true)) and
+       string.find(text, pattern) then return true end
+  end
+  return false
+end
+
+function CS.HasLearnedSpell(name)
+  local tabs = U.G("GetNumSpellTabs")
+  local info = U.G("GetSpellTabInfo")
+  local spellName = U.G("GetSpellName")
+  if type(tabs) ~= "function" or type(info) ~= "function" or
+     type(spellName) ~= "function" then return false end
+  local okTabs, count = pcall(tabs)
+  count = okTabs and tonumber(count) or 0
+  local tab
+  for tab = 1, count do
+    local ok, _, _, offset, spells = pcall(info, tab)
+    if ok then
+      local index
+      for index = CS.Number(offset) + 1, CS.Number(offset) + CS.Number(spells) do
+        local okName, current = pcall(spellName, index, U.G("BOOKTYPE_SPELL") or "spell")
+        if okName and current == name then return true end
+      end
     end
   end
-  return total
+  return false
+end
+
+function CS.ScanAuras()
+  if CS.auras and not CS.aurasDirty then return CS.auras end
+  local totals, names = {}, {}
+  local okClass, _, class = CS.Call("UnitClass", "player")
+  class = okClass and class or ""
+  local getBuff = U.G("GetPlayerBuff")
+  if type(getBuff) == "function" then
+    local harmful, limit
+    for harmful = 0, 1 do
+      limit = harmful == 1 and 6 or 31
+      local slot
+      for slot = 0, limit do
+        local okIndex, index = pcall(getBuff, slot, harmful == 1 and "HARMFUL" or "HELPFUL")
+        if okIndex and tonumber(index) and tonumber(index) > -1 then
+          if harmful == 0 then
+            local unitBuff = U.G("UnitBuff")
+            if type(unitBuff) == "function" then
+              local okIcon, icon, stacks = pcall(unitBuff, "player", slot)
+              if okIcon and icon == "Interface\\Icons\\Spell_Holy_CrusaderStrike" then
+                totals.zealStacks = CS.Number(stacks)
+              elseif okIcon and icon == "Interface\\Icons\\Ability_Shaman_WaterShield" then
+                totals.waterShieldStacks = CS.Number(stacks)
+              end
+            end
+          end
+          local left, _, count = CS.ScanLines(function(tip)
+            tip:SetPlayerBuff(index)
+          end)
+          if left then
+            local line
+            for line = 1, count do
+              if left[line] then
+                local value = harmful == 1 and (left[line] .. "@harmful@") or left[line]
+                CS.AddAuraLine(totals, names, value, harmful == 1, totals, class)
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  local talents = CS.ReadTalents()
+  if totals.innerFire then
+    local bonus = totals.innerFire
+    if (talents.improvedInnerFire or 0) > 0 then
+      bonus = math.floor(bonus + bonus * talents.improvedInnerFire / 100)
+    end
+    CS.AddValue(totals, "damageOnly", bonus)
+  end
+  if totals.zealHaste then
+    local haste = totals.zealHaste
+    if (talents.vengefulStrikes or 0) > 0 and (totals.zealStacks or 0) > 0 then
+      haste = haste + talents.vengefulStrikes * totals.zealStacks
+    end
+    CS.AddValue(totals, "haste", haste)
+  end
+  if (talents.waterShieldRank or 0) > 0 and (totals.waterShieldStacks or 0) > 0 then
+    CS.AddValue(totals, "casting", talents.waterShieldRank * totals.waterShieldStacks)
+  end
+  if class == "PRIEST" and names.Shadowform and
+     CS.HasLearnedSpell("Improved Shadowform") then
+    CS.AddValue(totals, "casting", 15)
+  end
+  if totals.shamanElementalMastery then
+    totals.shamanLightningBolt = 100
+    totals.shamanChainLightning = 100
+    totals.shamanFireFrost = 100
+  end
+  CS.auras, CS.auraNames, CS.aurasDirty = totals, names, false
+  return totals
 end
 
 -- ---------------------------------------------------------------------------
@@ -517,12 +981,8 @@ function CS.GearColor(gear, a, b)
 end
 
 function CS.Row(rows, label, value, color, estimate, tip)
-  table.insert(rows, { label = U.L(label), value = value, color = color,
+  table.insert(rows, { key = label, label = U.L(label), value = value, color = color,
                        estimate = estimate, tip = tip })
-end
-
-function CS.EstimateLine(key, value)
-  return U.L(key, value)
 end
 
 -- ---------------------------------------------------------------------------
@@ -679,6 +1139,125 @@ function CS.Haste(base, current)
   return haste
 end
 
+function CS.OffhandHasWeapon()
+  local loc = CS.EquipLoc(CS.SLOT_OFFHAND)
+  return loc == "INVTYPE_WEAPON" or loc == "INVTYPE_WEAPONOFFHAND"
+end
+
+function CS.HitTotal(gear, ranged)
+  local talents = CS.ReadTalents()
+  local auras = CS.ScanAuras()
+  local hit = (gear.hit or 0) + (talents.hit or 0) + (auras.hit or 0)
+  if CS.OffhandHasWeapon() then hit = hit + (talents.surefooted or 0) end
+  if ranged then hit = hit + (gear.rangedHit or 0) end
+  hit = hit - (auras.hitDebuff or 0)
+  return math.max(hit, 0)
+end
+
+function CS.SpellPowerParts(gear)
+  local talents = CS.ReadTalents()
+  local auras = CS.ScanAuras()
+  local common = (gear.spellDamage or 0) + (auras.spellDamage or 0)
+  if (talents.spiritualGuidance or 0) > 0 then
+    local ok, _, spirit = CS.Call("UnitStat", "player", 5)
+    if ok then
+      common = common + math.floor(talents.spiritualGuidance * CS.Number(spirit) / 100)
+    end
+  end
+  local damageOnly = (gear.damageOnly or 0) + (auras.damageOnly or 0)
+  local schools, highest = {}, 0
+  local school
+  for school in pairs(CS.SCHOOLS) do
+    schools[school] = (gear.school[school] or 0) + (auras[school] or 0)
+    if schools[school] > highest then highest = schools[school] end
+  end
+  return common, damageOnly, schools, highest
+end
+
+function CS.HealingTotal(gear)
+  local common = CS.SpellPowerParts(gear)
+  local talents = CS.ReadTalents()
+  local auras = CS.ScanAuras()
+  local healing = common + (gear.healing or 0) + (auras.healing or 0)
+  if (talents.ironclad or 0) > 0 then
+    local okArmor, baseArmor = CS.Call("UnitArmor", "player")
+    local okAgi, _, agility = CS.Call("UnitStat", "player", 2)
+    if okArmor and okAgi then
+      local fromGear = CS.Number(baseArmor) - CS.Number(agility) * 2
+      if (talents.toughness or 0) > 0 then
+        fromGear = fromGear / (1 + talents.toughness / 100)
+      end
+      healing = healing + math.floor(talents.ironclad * fromGear / 100)
+    end
+  end
+  if CS.auraNames and CS.auraNames["Tree of Life Form"] and
+     CS.auraNames["Tree of Life Aura"] then
+    local ok, _, spirit = CS.Call("UnitStat", "player", 5)
+    if ok then healing = healing + CS.Number(spirit) * 0.2 end
+  end
+  return healing
+end
+
+function CS.RangedCrit(class, gear)
+  local curve = CS.RANGED_CRIT[class]
+  if not curve then return 0 end
+  local level = math.max(1, math.min(CS.PlayerLevel(), 60))
+  local okAgi, _, agility = CS.Call("UnitStat", "player", 2)
+  agility = okAgi and CS.Number(agility) or 0
+  local rate = curve.first * (60 - level) / 59 +
+               curve.last * (level - 1) / 59
+  local crit = curve.base + (rate > 0 and agility / rate or 0) +
+               (gear.crit or 0) + (gear.rangedCrit or 0) +
+               (CS.ReadTalents().rangedCrit or 0) +
+               (CS.ScanAuras().rangedCrit or 0)
+  local okSkill, skill, mod = CS.Call("UnitRangedAttack", "player")
+  if okSkill then
+    local difference = CS.Number(skill) + CS.Number(mod) - level * 5
+    if difference >= 0 then crit = crit + difference * 0.04
+    else crit = crit + difference * 0.2 end
+  end
+  return math.max(crit, 0)
+end
+
+function CS.BlockValue(gear)
+  local ok, _, strength = CS.Call("UnitStat", "player", 1)
+  strength = ok and CS.Number(strength) or 0
+  local talents = CS.ReadTalents()
+  local auras = CS.ScanAuras()
+  local modifier = talents.blockMod or 0
+  if (talents.enhancingTotems or 0) > 0 and CS.HasAura("^Stoneskin$") then
+    modifier = modifier + talents.enhancingTotems
+  end
+  local value = (gear.blockValue or 0) + (auras.blockValue or 0) + strength / 20 - 1
+  value = math.floor(value + value * modifier / 100)
+  return math.max(0, value)
+end
+
+function CS.Avoidance()
+  local okDef, base, mod = CS.Call("UnitDefense", "player")
+  local defense = okDef and (CS.Number(base) + CS.Number(mod)) or 0
+  local miss = 5 + (defense - CS.PlayerLevel() * 5) * 0.04
+  local okDodge, dodge = CS.Call("GetDodgeChance")
+  local okParry, parry = CS.Call("GetParryChance")
+  local okBlock, block = CS.Call("GetBlockChance")
+  local total = miss + (okDodge and CS.Number(dodge) or 0) +
+                (okParry and CS.Number(parry) or 0) +
+                (okBlock and CS.Number(block) or 0)
+  return math.max(total, 0)
+end
+
+function CS.SpellHaste(gear, class)
+  local talents = CS.ReadTalents()
+  local auras = CS.ScanAuras()
+  local haste = (gear.haste or 0) + (auras.haste or 0) +
+                (talents.haste or 0)
+  haste = haste + (gear.spellHaste or 0) + (auras.spellHaste or 0) +
+          (talents.spellHaste or 0)
+  local ok, _, race = CS.Call("UnitRace", "player")
+  if ok and race == "NightElf" then haste = haste + 1 end
+  return haste
+end
+
 function CS.Melee(rows, gear, class)
   local ok, low, high, offLow, offHigh = CS.Call("UnitDamage", "player")
   local okSpeed, speed, offSpeed = CS.Call("UnitAttackSpeed", "player")
@@ -729,35 +1308,55 @@ function CS.Melee(rows, gear, class)
     CS.Row(rows, "CHARSTATS_CRIT", CS.Percent(crit), CS.GearColor(gear, "crit"))
   end
 
-  local notes = {}
-  local talentHit = CS.TalentSum(class, "hit", notes)
-  local estimate = { CS.EstimateLine("CHARSTATS_EST_GEAR", CS.Percent(gear.hit)) }
-  local i
-  for i = 1, table.getn(notes) do
-    table.insert(estimate, U.L("CHARSTATS_EST_TALENT", notes[i][1], CS.Percent(notes[i][2])))
-  end
-  -- Hidden at 0, as Forever's HITCHANCE and HASTE entries are (hideAt = 0).
-  if gear.hit + talentHit > 0 then
-    CS.Row(rows, "CHARSTATS_HIT", CS.Percent(gear.hit + talentHit),
-           CS.GearColor(gear, gear.hit), estimate)
-  end
+  CS.Row(rows, "CHARSTATS_HIT", CS.Percent(CS.HitTotal(gear, false)),
+         CS.GearColor(gear, gear.hit))
 
   local haste = CS.Haste(gear.speed[16], speed)
   if haste and haste ~= 0 then CS.Row(rows, "CHARSTATS_HASTE", CS.Percent(haste)) end
 
-  local okSkill, skill, mod = CS.Call("UnitAttackBothHands", "player")
+  local okSkill, skill, mod, offSkill, offMod =
+    CS.Call("UnitAttackBothHands", "player")
   if okSkill then
     skill, mod = CS.Number(skill), CS.Number(mod)
-    CS.Row(rows, "CHARSTATS_SKILL", tostring(skill + mod), CS.GearColor(gear, "skill"),
+    local value = tostring(skill + mod)
+    if dual and offSkill then
+      value = value .. " / " .. tostring(CS.Number(offSkill) + CS.Number(offMod))
+    end
+    CS.Row(rows, "CHARSTATS_SKILL", value, CS.GearColor(gear, "skill"),
            nil, CS.RatingTip("ATTACK_TOOLTIP", "ATTACK_TOOLTIP_SUBTEXT", skill, mod))
   end
 end
 
 function CS.Ranged(rows, gear, class)
-  if not CS.ItemId(CS.SLOT_RANGED) then return false end
+  local unavailable = false
+  local relic = U.G("UnitHasRelicSlot")
+  if type(relic) == "function" then
+    local ok, hasRelic = pcall(relic, "player")
+    unavailable = ok and hasRelic and true or false
+  end
+  if not CS.ItemId(CS.SLOT_RANGED) then unavailable = true end
+  if unavailable then
+    local value = CS.Global("NOT_APPLICABLE") or "--"
+    CS.Row(rows, "CHARSTATS_SKILL", value)
+    CS.Row(rows, "CHARSTATS_DAMAGE", value)
+    CS.Row(rows, "CHARSTATS_SPEED", value)
+    CS.Row(rows, "CHARSTATS_AP", value)
+    CS.Row(rows, "CHARSTATS_HIT", value)
+    CS.Row(rows, "CHARSTATS_CRIT", value)
+    return false
+  end
   local ok, speed, low, high = CS.Call("UnitRangedDamage", "player")
   speed = ok and CS.Number(speed) or 0
-  if speed <= 0 then return false end
+  if speed <= 0 then
+    local value = CS.Global("NOT_APPLICABLE") or "--"
+    CS.Row(rows, "CHARSTATS_SKILL", value)
+    CS.Row(rows, "CHARSTATS_DAMAGE", value)
+    CS.Row(rows, "CHARSTATS_SPEED", value)
+    CS.Row(rows, "CHARSTATS_AP", value)
+    CS.Row(rows, "CHARSTATS_HIT", value)
+    CS.Row(rows, "CHARSTATS_CRIT", value)
+    return false
+  end
   low, high = CS.Number(low), CS.Number(high)
   -- No hover on damage or DPS: the damage tooltip's three figures are the
   -- three rows (user request, 2026-09-28), DPS under the speed.
@@ -774,23 +1373,13 @@ function CS.Ranged(rows, gear, class)
            CS.PowerTip("RANGED_ATTACK_POWER", "RANGED_ATTACK_POWER_TOOLTIP",
                        base, plus, minus))
   end
-  local crit = CS.SpellCrit(CS.RANGED_SPELLS, "rangedSpell")
-  if crit then
-    CS.Row(rows, "CHARSTATS_CRIT", CS.Percent(crit), CS.GearColor(gear, "crit"))
-  end
+  local crit = CS.RangedCrit(class, gear)
+  CS.Row(rows, "CHARSTATS_CRIT", CS.Percent(crit), CS.GearColor(gear, "crit"),
+         nil)
 
-  local notes = {}
-  local talentHit = CS.TalentSum(class, "rangedHit", notes)
-  local estimate = { CS.EstimateLine("CHARSTATS_EST_GEAR", CS.Percent(gear.hit)) }
-  local i
-  for i = 1, table.getn(notes) do
-    table.insert(estimate, U.L("CHARSTATS_EST_TALENT", notes[i][1], CS.Percent(notes[i][2])))
-  end
-  -- Hidden at 0, as Forever's HITCHANCE and HASTE entries are (hideAt = 0).
-  if gear.hit + talentHit > 0 then
-    CS.Row(rows, "CHARSTATS_HIT", CS.Percent(gear.hit + talentHit),
-           CS.GearColor(gear, gear.hit), estimate)
-  end
+  local rangedHit = (gear.hit or 0) + (gear.rangedHit or 0)
+  CS.Row(rows, "CHARSTATS_HIT", CS.Percent(CS.HitTotal(gear, true)),
+         CS.GearColor(gear, rangedHit))
 
   local haste = CS.Haste(gear.speed[CS.SLOT_RANGED], speed)
   if haste and haste ~= 0 then CS.Row(rows, "CHARSTATS_HASTE", CS.Percent(haste)) end
@@ -804,102 +1393,96 @@ function CS.Ranged(rows, gear, class)
   return true
 end
 
--- Talent lines that only concern some spells, for the "?" breakdown.
-function CS.NoteLines(estimate, class, field)
-  local notes = {}
-  CS.TalentSum(class, field, notes)
-  if table.getn(notes) == 0 then return end
-  table.insert(estimate, U.L("CHARSTATS_EST_SOME_SPELLS"))
-  local i
-  for i = 1, table.getn(notes) do
-    table.insert(estimate, U.L("CHARSTATS_EST_TALENT", notes[i][1], CS.Percent(notes[i][2])))
-  end
-end
-
 function CS.Spell(rows, gear, class, level)
   local okType, powerType = CS.Call("UnitPowerType", "player")
-  if not okType or tonumber(powerType) ~= 0 then return false end
+  local manaUser = okType and (tonumber(powerType) == 0 or class == "DRUID")
 
-  local schoolLines = {}
-  local school
-  for school in pairs(gear.school) do
-    table.insert(schoolLines, U.L("CHARSTATS_EST_SCHOOL_" .. string.upper(school),
-                                  gear.spellDamage + gear.school[school]))
-  end
-  table.sort(schoolLines)
-  local damageEstimate = { CS.EstimateLine("CHARSTATS_EST_GEAR", tostring(gear.spellDamage)) }
-  local i
-  for i = 1, table.getn(schoolLines) do table.insert(damageEstimate, schoolLines[i]) end
-  if gear.spellDamage > 0 or table.getn(schoolLines) > 0 then
-    CS.Row(rows, "CHARSTATS_SPELL_DAMAGE", tostring(gear.spellDamage),
-           CS.GearColor(gear, gear.spellDamage, table.getn(schoolLines)), damageEstimate)
-  end
-  if gear.healing > 0 then
-    CS.Row(rows, "CHARSTATS_HEALING", tostring(gear.healing), CS.GearColor(gear, gear.healing),
-           { CS.EstimateLine("CHARSTATS_EST_GEAR", tostring(gear.healing)) })
-  end
+  local talents = CS.ReadTalents()
+  local auras = CS.ScanAuras()
+  local common, damageOnly, schools, highest = CS.SpellPowerParts(gear)
+  CS.Row(rows, "CHARSTATS_SPELL_DAMAGE",
+         tostring(math.floor(common + damageOnly + highest)),
+         CS.GearColor(gear, gear.spellDamage, highest))
+  CS.Row(rows, "CHARSTATS_HEALING", tostring(math.floor(CS.HealingTotal(gear))),
+         CS.GearColor(gear, gear.spellDamage, gear.healing))
 
-  local notes = {}
-  local talentHit = CS.TalentSum(class, "spellHit", notes)
-  local hitEstimate = { CS.EstimateLine("CHARSTATS_EST_GEAR", CS.Percent(gear.spellHit)) }
-  for i = 1, table.getn(notes) do
-    table.insert(hitEstimate, U.L("CHARSTATS_EST_TALENT", notes[i][1], CS.Percent(notes[i][2])))
-  end
-  CS.NoteLines(hitEstimate, class, "spellHitNote")
-  if gear.spellHit + talentHit > 0 or table.getn(hitEstimate) > 1 then
-    CS.Row(rows, "CHARSTATS_SPELL_HIT", CS.Percent(gear.spellHit + talentHit),
-           CS.GearColor(gear, gear.spellHit), hitEstimate)
-  end
+  local spellHit = (gear.spellHit or 0) + (talents.spellHit or 0) +
+                   (auras.spellHit or 0)
+  CS.Row(rows, "CHARSTATS_SPELL_HIT", tostring(spellHit) .. "%",
+         CS.GearColor(gear, gear.spellHit))
 
   local crit = CS.SPELL_CRIT[class]
-  if crit then
-    local okInt, _, intellect = CS.Call("UnitStat", "player", 4)
-    intellect = okInt and CS.Number(intellect) or 0
-    local ratio = crit.int * math.max(1, math.min(level, 60)) / 60
-    local fromInt = crit.base + intellect / ratio
-    notes = {}
-    local talentCrit = CS.TalentSum(class, "spellCrit", notes)
-    local critEstimate = {
-      CS.EstimateLine("CHARSTATS_EST_BASE", CS.Percent(fromInt)),
-      CS.EstimateLine("CHARSTATS_EST_GEAR", CS.Percent(gear.spellCrit)),
-    }
-    for i = 1, table.getn(notes) do
-      table.insert(critEstimate, U.L("CHARSTATS_EST_TALENT", notes[i][1], CS.Percent(notes[i][2])))
+  do
+    local fromInt = 0
+    if crit then
+      local okInt, _, intellect = CS.Call("UnitStat", "player", 4)
+      intellect = okInt and CS.Number(intellect) or 0
+      fromInt = crit.base + intellect /
+                (crit.coefficient + crit.level * math.max(1, level))
     end
-    CS.NoteLines(critEstimate, class, "spellCritNote")
+    local totalCrit = fromInt + (gear.spellCrit or 0) +
+                      (talents.spellCrit or 0) + (auras.spellCrit or 0) -
+                      (auras.spellCritDebuff or 0)
+    if class == "WARLOCK" and (talents.warlockDestruction or 0) > 0 then
+      totalCrit = totalCrit + talents.warlockDestruction
+    elseif class == "PRIEST" and (talents.priestOffensive or 0) > 0 and
+           (talents.priestDiscipline or 0) > 0 then
+      totalCrit = totalCrit + math.min(talents.priestOffensive,
+                                       talents.priestDiscipline)
+    end
     CS.Row(rows, "CHARSTATS_SPELL_CRIT",
-           CS.Percent(fromInt + gear.spellCrit + talentCrit),
-           CS.GearColor(gear, gear.spellCrit), critEstimate)
+           CS.Percent(totalCrit), CS.GearColor(gear, gear.spellCrit))
   end
 
   if gear.spellPen > 0 then
     CS.Row(rows, "CHARSTATS_SPELL_PEN", tostring(gear.spellPen), CS.GearColor(gear, gear.spellPen),
-           { CS.EstimateLine("CHARSTATS_EST_GEAR", tostring(gear.spellPen)) })
+           nil)
   end
 
+  local spellHaste = CS.SpellHaste(gear, class)
+  CS.Row(rows, "CHARSTATS_SPELL_HASTE", string.format("%d%%", spellHaste),
+         CS.GearColor(gear, gear.haste, gear.spellHaste))
+
   local regen = CS.SPIRIT_REGEN[class]
-  if regen then
+  if not manaUser then
+    CS.Row(rows, "CHARSTATS_REGEN", CS.Global("NOT_APPLICABLE") or "--")
+  elseif regen then
     local okSpi, _, spirit = CS.Call("UnitStat", "player", 5)
     spirit = okSpi and CS.Number(spirit) or 0
-    local fromSpirit = (regen.base + spirit / regen.div) * 2.5
-    CS.Row(rows, "CHARSTATS_REGEN", tostring(math.floor(fromSpirit + gear.mp5 + 0.5)),
-           CS.GearColor(gear, gear.mp5), {
-      CS.EstimateLine("CHARSTATS_EST_SPIRIT", string.format("%.1f", fromSpirit)),
-      CS.EstimateLine("CHARSTATS_EST_GEAR", tostring(gear.mp5)),
-    })
-    notes = {}
-    local kept = CS.TalentSum(class, "castRegen", notes)
-    if kept > 0 or gear.mp5 > 0 then
-      local casting = { CS.EstimateLine("CHARSTATS_EST_GEAR", tostring(gear.mp5)) }
-      for i = 1, table.getn(notes) do
-        table.insert(casting, U.L("CHARSTATS_EST_TALENT", notes[i][1], notes[i][2] .. "%"))
-      end
+    local fromSpirit = regen.base + spirit / regen.div
+    if (auras.manaRegenPercent or 0) > 0 then
+      fromSpirit = fromSpirit + fromSpirit * auras.manaRegenPercent / 100
+    end
+    local mp5 = (gear.mp5 or 0) + (auras.mp5 or 0) +
+                (auras.mp5Tick or 0) * 2.5 + (auras.mp1 or 0) * 5
+    local mp2 = mp5 * 0.4
+    local total = fromSpirit + mp2
+    local kept = (talents.casting or 0) + (auras.casting or 0) +
+                 (gear.casting or 0)
+    local okRace, _, race = CS.Call("UnitRace", "player")
+    if okRace and race == "Human" then kept = kept + 5 end
+    kept = math.min(kept, 100)
+    local whileCasting = fromSpirit * kept / 100 + mp2
+    CS.Row(rows, "CHARSTATS_REGEN", tostring(math.floor(total)),
+           CS.GearColor(gear, gear.mp5))
+    if whileCasting ~= total then
       CS.Row(rows, "CHARSTATS_REGEN_CASTING",
-             tostring(math.floor(fromSpirit * kept / 100 + gear.mp5 + 0.5)),
-             CS.GearColor(gear, gear.mp5), casting)
+             tostring(math.floor(whileCasting)), CS.GearColor(gear, gear.mp5))
     end
   end
   return true
+end
+
+function CS.SpellSchools(rows, gear)
+  local common, damageOnly, schools = CS.SpellPowerParts(gear)
+  local i
+  for i = 1, table.getn(CS.SPELL_SCHOOLS) do
+    local entry = CS.SPELL_SCHOOLS[i]
+    local school = schools[entry[1]] or 0
+    local total = common + damageOnly + school
+    CS.Row(rows, entry[2], tostring(total),
+           CS.GearColor(gear, gear.spellDamage, gear.school[entry[1]] or 0))
+  end
 end
 
 function CS.Defense(rows, gear)
@@ -922,13 +1505,18 @@ function CS.Defense(rows, gear)
     CS.Row(rows, "CHARSTATS_DODGE", CS.Percent(CS.Number(dodge)), CS.GearColor(gear, "dodge"))
   end
   local okParry, parry = CS.Call("GetParryChance")
-  if okParry and CS.Number(parry) > 0 then
+  if okParry then
     CS.Row(rows, "CHARSTATS_PARRY", CS.Percent(CS.Number(parry)), CS.GearColor(gear, "parry"))
   end
   local okBlock, block = CS.Call("GetBlockChance")
-  if okBlock and (CS.Number(block) > 0 or CS.EquipLoc(CS.SLOT_OFFHAND) == "INVTYPE_SHIELD") then
-    CS.Row(rows, "CHARSTATS_BLOCK", CS.Percent(CS.Number(block)), CS.GearColor(gear, "block"))
+  if okBlock then
+    local tip = CS.NativeTip(U.L("CHARSTATS_BLOCK"), nil)
+    table.insert(tip, { U.L("CHARSTATS_BLOCK_VALUE"),
+                        tostring(CS.BlockValue(gear)) })
+    CS.Row(rows, "CHARSTATS_BLOCK", CS.Percent(CS.Number(block)),
+           CS.GearColor(gear, "block"), nil, tip)
   end
+  CS.Row(rows, "CHARSTATS_AVOIDANCE", CS.Percent(CS.Avoidance()))
 end
 
 function CS.Resistances(rows, gear)
@@ -945,20 +1533,98 @@ function CS.Resistances(rows, gear)
   end
 end
 
--- The whole readout: a list of { title, rows }. Categories with no rows are
--- left out. Every section is guarded on its own, so one failing read costs
--- that section, not the panel.
-function CS.Collect()
+function CS.EmptyGear()
+  return { spellDamage = 0, damageOnly = 0, healing = 0,
+           spellHit = 0, spellCrit = 0,
+           hit = 0, rangedHit = 0, crit = 0, rangedCrit = 0,
+           mp5 = 0, casting = 0, spellPen = 0, haste = 0,
+           spellHaste = 0, blockValue = 0, armorPen = 0,
+           priestHoly = 0, priestPrayer = 0,
+           school = {}, speed = {},
+           bonus = {} }
+end
+
+function CS.Context()
   local okClass, _, class = CS.Call("UnitClass", "player")
   class = okClass and class or ""
   local okLevel, level = CS.Call("UnitLevel", "player")
   level = okLevel and CS.Number(level) or 60
-
+  pcall(CS.ReadTalents)
   local okGear, gear = pcall(CS.ScanGear)
-  if not okGear or type(gear) ~= "table" then
-    gear = { spellDamage = 0, healing = 0, spellHit = 0, spellCrit = 0, hit = 0,
-             mp5 = 0, spellPen = 0, school = {}, speed = {}, bonus = {} }
+  if not okGear or type(gear) ~= "table" then gear = CS.EmptyGear() end
+  pcall(CS.ScanAuras)
+  return gear, class, level
+end
+
+function CS.PageSource(key, gear, class, level)
+  local rows = {}
+  if key == "base" then
+    CS.Attributes(rows, gear)
+    CS.Defense(rows, gear)
+  elseif key == "melee" then
+    CS.Melee(rows, gear, class)
+  elseif key == "ranged" then
+    CS.Ranged(rows, gear, class)
+  elseif key == "spell" then
+    CS.Spell(rows, gear, class, level)
+  elseif key == "schools" then
+    CS.SpellSchools(rows, gear)
+  elseif key == "defense" then
+    CS.Defense(rows, gear)
   end
+  return rows
+end
+
+function CS.PageRows(definition, gear, class, level)
+  local ok, source = pcall(CS.PageSource, definition.key, gear, class, level)
+  if not ok or type(source) ~= "table" then
+    U.Debug("characterstats page " .. definition.key .. ": " .. tostring(source))
+    source = {}
+  end
+  local byKey = {}
+  local i
+  for i = 1, table.getn(source) do
+    local row = source[i]
+    if row.key and not byKey[row.key] then byKey[row.key] = row end
+  end
+  local rows = {}
+  for i = 1, table.getn(definition.rows) do
+    local key = definition.rows[i]
+    local row = byKey[key]
+    if definition.key == "spell" and key == "CHARSTATS_REGEN" and row and
+       byKey.CHARSTATS_REGEN_CASTING then
+      row = { key = row.key, label = row.label,
+              value = row.value .. " (" .. byKey.CHARSTATS_REGEN_CASTING.value .. ")",
+              color = row.color, estimate = row.estimate, tip = row.tip }
+    end
+    table.insert(rows, row or {
+      key = key, label = U.L(key), value = CS.Global("NOT_APPLICABLE") or "--",
+    })
+  end
+  return rows
+end
+
+-- BetterCharacterStats-compatible page data for the native Classic panel.
+function CS.GetPages()
+  local gear, class, level = CS.Context()
+  local pages = {}
+  local i
+  for i = 1, table.getn(CS.PAGES) do
+    local definition = CS.PAGES[i]
+    table.insert(pages, {
+      key = definition.key,
+      title = U.L(definition.title),
+      rows = CS.PageRows(definition, gear, class, level),
+    })
+  end
+  return pages
+end
+
+-- The whole readout: a list of { title, rows }. Categories with no rows are
+-- left out. Every section is guarded on its own, so one failing read costs
+-- that section, not the panel.
+function CS.Collect()
+  local gear, class, level = CS.Context()
 
   local sections = {
     { "CHARSTATS_CAT_GENERAL", function(rows) CS.General(rows, "player", gear) end },
@@ -966,6 +1632,7 @@ function CS.Collect()
     { "CHARSTATS_CAT_MELEE", function(rows) CS.Melee(rows, gear, class) end },
     { "CHARSTATS_CAT_RANGED", function(rows) CS.Ranged(rows, gear, class) end },
     { "CHARSTATS_CAT_SPELL", function(rows) CS.Spell(rows, gear, class, level) end },
+    { "CHARSTATS_CAT_SCHOOLS", function(rows) CS.SpellSchools(rows, gear) end },
     { "CHARSTATS_CAT_DEFENSE", function(rows) CS.Defense(rows, gear) end },
     { "CHARSTATS_CAT_RESIST", function(rows) CS.Resistances(rows, gear) end },
   }
@@ -987,4 +1654,24 @@ end
 function CS.Invalidate()
   CS.gearKey, CS.gear = nil, nil
   CS.talentKey, CS.talents = nil, nil
+  CS.talentSpecial = nil
+  CS.auras, CS.auraNames, CS.aurasDirty = nil, nil, true
 end
+
+-- Keep the same dirty-source model as BetterCharacterStats. The visible
+-- panel's existing half-second refresh performs the actual scans.
+U.RegisterEvent("UNIT_INVENTORY_CHANGED", function(event, unit)
+  if not unit or unit == "player" then CS.gearKey, CS.gear = nil, nil end
+end)
+U.RegisterEvent("CHARACTER_POINTS_CHANGED", function()
+  CS.talentKey, CS.talents, CS.talentSpecial = nil, nil, nil
+  CS.aurasDirty = true
+end)
+U.RegisterEvent("PLAYER_LEVEL_UP", function()
+  CS.talentKey, CS.talents, CS.talentSpecial = nil, nil, nil
+  CS.aurasDirty = true
+end)
+U.RegisterEvent("UNIT_AURA", function(event, unit)
+  if not unit or unit == "player" then CS.aurasDirty = true end
+end)
+U.RegisterEvent("PLAYER_AURAS_CHANGED", function() CS.aurasDirty = true end)

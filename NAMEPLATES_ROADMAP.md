@@ -20,6 +20,10 @@ relaunch**, because the TOC gained `core/playercache.lua` and
 they show in `knowledge.json` (record
 `nameplates.pandaui_shaguplates_options_unverified`).
 
+**Reported 2026-10-27:** the observed issue may be a conflict with ShaguTweaks
+and ShaguTweaks Extra. Confirm with each addon disabled independently before
+changing pandaUI.
+
 ## OctoWoW differences from UnrealUI (deliberate)
 
 | UnrealUI | pandaUI | Why |
@@ -124,6 +128,25 @@ nampower `GetUnitData` could also give real HP for players and creatures
 missing from `core/unitvitals.lua`.
 
 None of this is verified on OctoWoW.
+
+## Requested (user request 2026-10-26, not started)
+
+**Tank mode**: colour the health bar by threat state.
+
+| State | Colour |
+|---|---|
+| The player has aggro on the mob | Green |
+| The player does not have aggro | Red |
+| Another tank has aggro | Blue (or another colour) |
+
+Also wanted: a colour choice for a target that is stunned, disoriented or
+otherwise crowd-controlled.
+
+**Constraint:** a stock 1.12 plate has no unit token, so threat and CC state
+are only readable for the target and mouseover, or by name from the combat log.
+The DLL-based combat-state colours sit under "Won't do" until Octo evidence
+exists. Probe what is readable first (`UnitExists("targettarget")` for the
+target, combat-log aura lines for CC) and record it in `knowledge.json`.
 
 ## Won't do
 

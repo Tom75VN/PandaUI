@@ -706,9 +706,17 @@ local function BuildFrame()
 
   pcall(frame.SetWidth, frame, 676)
   pcall(frame.SetHeight, frame, 440)
-  pcall(frame.DisableDrawLayer, frame, "BACKGROUND")
+  -- Keep BACKGROUND enabled: U.CreateBackdrop draws the flat theme's window
+  -- fill there. StripStockTextures already removes the native artwork while
+  -- preserving PandaUI-owned regions on later refreshes.
   StripDecorations(frame)
-  U.CreateBackdrop(frame, { background = { 0.01, 0.01, 0.01, 0.78 } })
+  U.CreateBackdrop(frame, {
+    background = { 0.01, 0.01, 0.01, 0.78 },
+    -- questlogbg.v1: SetBackdrop reports the right fill but does not draw it
+    -- here; an owned BACKGROUND texture does. The Modern WoW page-art path
+    -- keeps its existing backdrop behavior and remains visually independent.
+    textureFill = not ModernWow(),
+  })
 
   local title = G("QuestLogTitleText")
   if title then

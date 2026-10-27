@@ -133,10 +133,12 @@ end
 -- options  { after = "<entry id>", defaultPage = "<page id>",
 --            icon = "<extensionless texture path>",
 --            watermark = "<extensionless texture path>", category = true,
---            version = "<text>" | fn, title = "<text>" | fn }.
+--            version = "<text>" | fn, title = "<text>" | fn,
+--            pageWidth = <number> }.
 --          after places the group like RegisterSettingsTab's option does;
---          defaultPage is opened whenever a click expands the group; the rest
---          are MarkAddonCategory's.
+--          defaultPage is opened whenever a click expands the group;
+--          pageWidth is the width its pages are laid out for (see
+--          IntegratedWidthFor); the rest are MarkAddonCategory's.
 function U.RegisterSettingsGroup(id, label, options)
   if type(id) ~= "string" then
     U.Error("RegisterSettingsGroup requires an id")
@@ -160,6 +162,7 @@ function U.RegisterSettingsGroup(id, label, options)
   entry.defaultPage = options.defaultPage
   entry.icon = options.icon
   entry.watermark = options.watermark
+  entry.pageWidth = tonumber(options.pageWidth)
   MarkAddonCategory(entry, options)
 
   local afterIndex
@@ -191,7 +194,8 @@ end
 --          returned, runs every time the page is opened.
 -- options  { parent = "<group id>", after = "<entry id>", muted = true,
 --            tooltip = "...", icon = "<extensionless texture path>",
---            watermark = "<extensionless texture path>" }.
+--            watermark = "<extensionless texture path>",
+--            pageWidth = <number> }.
 --          Muted pages remain selectable so they can explain why their normal
 --          controls are unavailable; only their sidebar presentation changes.
 function U.RegisterSettingsTab(id, label, build, options)
@@ -216,6 +220,7 @@ function U.RegisterSettingsTab(id, label, build, options)
     tooltip = options.tooltip,
     icon = options.icon,
     watermark = options.watermark,
+    pageWidth = tonumber(options.pageWidth),
   }
   MarkAddonCategory(entry, options)
   local afterIndex
@@ -441,7 +446,10 @@ local PANDA_ALPHA = 0.2
 local PANDA_INSET = 8
 local watermarkHosts = {}
 
+-- pandaUI pages draw the pUI logo; client pages (no entry) draw the
+-- settings panda. A page or its group may still name its own watermark.
 local function WatermarkPath(entry)
+  if not entry then return M.texture.settingsWatermark end
   local current = entry
   while current do
     if type(current.watermark) == "string" and current.watermark ~= "" then
@@ -449,7 +457,7 @@ local function WatermarkPath(entry)
     end
     current = current.parent and FindEntry(current.parent) or nil
   end
-  return M.texture.settingsWatermark
+  return M.texture.addonLogo
 end
 
 local function PaintPandaWatermark(host, entry)
@@ -1284,12 +1292,19 @@ local function BuildIntegratedCanvas(parent)
   end)
 end
 
--- Panda UI's pages draw unscaled at U.SETTINGS_PAGE_WIDTH; a sibling addon's
--- page keeps the legacy width and the fit scale that comes with it.
+-- Panda UI's pages draw unscaled at U.SETTINGS_PAGE_WIDTH. A sibling addon's
+-- page draws at the pageWidth it (or its group) registered, so one laid out
+-- for U.SETTINGS_PAGE_WIDTH keeps the game's text size; without one it keeps
+-- the legacy width and the fit scale that comes with it.
 local function IntegratedWidthFor(entry)
   if U.SettingsEntryScope(entry) == "pandaui" and
      tonumber(U.SETTINGS_PAGE_WIDTH) then
     return U.SETTINGS_PAGE_WIDTH
+  end
+  local owner = entry
+  while owner do
+    if owner.pageWidth and owner.pageWidth > 0 then return owner.pageWidth end
+    owner = owner.parent and FindEntry(owner.parent) or nil
   end
   return LEGACY_PAGE_WIDTH
 end
@@ -1467,6 +1482,29 @@ end
 -- Builds every page not built yet. parent is the window's page box, needed
 -- only when the canvas does not exist; a canvas made here is hidden again,
 -- as U.ShowIntegratedSettings expects to find it.
+-- A page's short note on the right of the window's title line, level with
+-- "Panda UI vX". It belongs to the unscrolled root, so the scroll frame
+-- neither clips nor moves it; the page lists it with its widgets, so page
+-- switches and HideIntegratedSettings show and hide it. Nil outside the
+-- integrated window.
+function U.CreateIntegratedSettingsHeaderNote(text)
+  local gs = U.gameSettings
+  if not integrated.root or not gs or not gs.content then return nil end
+  local note = U.CreateSettingsLabel(integrated.root, {
+    size = M.fontSize.small,
+    color = M.color.textDim,
+    inherits = "GameFontNormalSmall",
+    justify = "RIGHT",
+    width = 340,
+    height = 14,
+  })
+  if not note then return nil end
+  note:SetPoint("RIGHT", gs.content, "TOPRIGHT",
+                -M.foreverWow.panel.listTitleInset.x, -gs.CONTENT_HEADER / 2)
+  note:SetText(text or "")
+  return note
+end
+
 function U.IndexIntegratedSettings(parent)
   local made = false
   if not integrated.canvas then

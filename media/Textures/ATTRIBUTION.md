@@ -3,6 +3,12 @@
 Theme folders keep their own `ATTRIBUTION.md`. This file covers textures that
 sit directly in `media/Textures/`.
 
+- `quest-starter.tga`: small yellow available-quest mark on bag and bank items
+  that begin a quest (`M.texture.questStarter`, drawn by `core/itemslot.lua`).
+  Copied unchanged on 2026-10-26 from PandaQuest's
+  `media/Textures/Map/Pins/questIcon.tga`, where it is the addon-owned
+  available-quest icon. It is a 32x32 uncompressed RGBA TGA with a 19x32
+  authored crop; PandaUI removes only the transparent right padding at draw time.
 - `mousewheel-zoom.tga`: World Map "wheel zooms" hint (`M.texture.mapZoomHint`,
   drawn by `modules/worldmap.lua`). Supplied by the pandaUI author on
   2026-10-20; the author generated it with ChatGPT's image model from a prompt

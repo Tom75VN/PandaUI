@@ -98,6 +98,153 @@ function U.RaiseOverBagDragStrip(window, controls)
   end
 end
 
+-- Shared bottom-right resize grip for the carried bag, live bank and saved
+-- bank. The client-proven chat / PandaQuest recipe moves a Button and derives
+-- geometry from its position instead of calling Frame:StartSizing.
+function U.BuildBagResizeGrip(options)
+  options = options or {}
+  local window = options.window
+  local target = options.target or window
+  if not window or not target or type(options.onResize) ~= "function" then
+    return nil
+  end
+
+  local grip = CreateFrame("Button", options.name, window)
+  -- The visible diagonal stays compact, but the mouse target extends farther
+  -- into the window so the corner is easy to catch at small UI scales.
+  grip:SetWidth(24)
+  grip:SetHeight(24)
+  grip:RegisterForDrag("LeftButton")
+  pcall(grip.EnableMouse, grip, true)
+  local levelOk, level = pcall(window.GetFrameLevel, window)
+  level = (levelOk and tonumber(level)) or 0
+  pcall(grip.SetFrameLevel, grip, level + 30)
+
+  -- The Button must move under the cursor to drive resizing, but its visible
+  -- marker must not follow it away from a snapped window edge. Keep the marker
+  -- on its own mouse-transparent child, permanently anchored to the window.
+  local markerName = options.name and (options.name .. "Marker") or nil
+  local marker = CreateFrame("Frame", markerName, window)
+  marker:SetWidth(16)
+  marker:SetHeight(16)
+  marker:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -2, 2)
+  pcall(marker.SetFrameLevel, marker, level + 30)
+  pcall(marker.EnableMouse, marker, false)
+
+  local icon = marker:CreateTexture(nil, "OVERLAY")
+  icon:SetTexture(M.texture.chatResizeGrip)
+  icon:SetAllPoints(marker)
+  icon:Hide()
+  grip.icon = icon
+  grip.marker = marker
+
+  local state = { active = false, hover = false }
+
+  local function Read(object, method)
+    if not object or type(object[method]) ~= "function" then return nil end
+    local ok, value = pcall(object[method], object)
+    return ok and tonumber(value) or nil
+  end
+
+  local function Anchor()
+    grip:ClearAllPoints()
+    -- Straddle the corner instead of covering the bank's last item slot.
+    grip:SetPoint("CENTER", window, "BOTTOMRIGHT", -2, 2)
+  end
+
+  -- Hold the top-left corner fixed while the free grip drives the lower-right.
+  -- GetLeft/GetTop and SetPoint offsets are all in the target's own units.
+  local function PinTopLeft()
+    local left = Read(target, "GetLeft")
+    local top = Read(target, "GetTop")
+    if not left or not top then return false end
+    local ratio = U.FrameUIRatio(target)
+    if not ratio or ratio <= 0 then ratio = 1 end
+    local position = {
+      point = "TOPLEFT", relativePoint = "TOPLEFT",
+      x = left, y = top - U.UIHeight() / ratio,
+    }
+    if not U.ApplyFramePoint(target, position) then return false end
+    if options.id then
+      U.SavePosition(options.id, position.point, position.relativePoint,
+                     position.x, position.y)
+    end
+    Anchor()
+    return true
+  end
+
+  local function Update()
+    if not state.active then return end
+    local left = Read(grip, "GetLeft")
+    local bottom = Read(grip, "GetBottom")
+    if not left or not bottom then return end
+    if left == state.lastLeft and bottom == state.lastBottom then return end
+    state.lastLeft, state.lastBottom = left, bottom
+    options.onResize(state.width + left - state.left,
+                     state.height - (bottom - state.bottom))
+  end
+
+  local function Finish()
+    if not state.active then return end
+    Update()
+    state.active = false
+    U.UnregisterUpdate(options.updateId)
+    pcall(grip.StopMovingOrSizing, grip)
+    U.HoldScreenGuard(target, false)
+    Anchor()
+    state.hover = false
+    icon:Hide()
+    if type(options.onStop) == "function" then options.onStop() end
+    U.CheckOnScreen(target)
+  end
+
+  local function Start()
+    if not PinTopLeft() then return end
+    state.width = Read(target, "GetWidth")
+    state.height = Read(target, "GetHeight")
+    if not state.width or not state.height then return end
+
+    pcall(grip.SetMovable, grip, true)
+    if pcall(grip.StartMoving, grip) then
+      pcall(grip.StopMovingOrSizing, grip)
+    end
+    Anchor()
+    state.left = Read(grip, "GetLeft")
+    state.bottom = Read(grip, "GetBottom")
+    if not state.left or not state.bottom or
+       not pcall(grip.StartMoving, grip) then
+      Anchor()
+      return
+    end
+
+    state.active = true
+    state.lastLeft, state.lastBottom = state.left, state.bottom
+    grip:Show()
+    icon:Show()
+    U.HoldScreenGuard(target, true)
+    U.RegisterUpdate(options.updateId, 0.02, Update)
+  end
+
+  grip:SetScript("OnEnter", function()
+    state.hover = true
+    icon:Show()
+  end)
+  grip:SetScript("OnLeave", function()
+    state.hover = false
+    if not state.active then icon:Hide() end
+  end)
+  grip:SetScript("OnDragStart", Start)
+  grip:SetScript("OnDragStop", Finish)
+  grip:SetScript("OnMouseUp", Finish)
+  U.PostHookScript(window, "OnHide", function()
+    Finish()
+    state.hover = false
+    icon:Hide()
+  end)
+  Anchor()
+  return grip
+end
+
 -- Metal housing over the window's flat panel; call again after a resize.
 function U.ModernWowBagHousing(window)
   if not window or type(U.ModernWowMetalFrame) ~= "function" then
@@ -385,6 +532,12 @@ function design.LaneSearch(spec, lane)
     left = okL and tonumber(left)
     if not left or not right then return end
     local span = (right - lane.right) - (left + lane.left)
+    if span < (lane.minWidth or 48) then
+      ctl.width = 0
+      ctl.field:Hide()
+      return
+    end
+    ctl.field:Show()
     local width = math.floor(span * (lane.widthScale or 1) + 0.5)
     if width < 1 or width == ctl.width then return end
     ctl.width = width

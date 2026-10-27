@@ -459,7 +459,143 @@ end
 -- target and switching back keeps the timers running instead of restarting
 -- them.
 -- ---------------------------------------------------------------------------
-local MAX_UNITS = 16
+-- Every visible nameplate keeps a store now (Nampower), so the history is
+-- sized for a pull rather than for target switching alone.
+local MAX_UNITS = 40
+
+-- ---------------------------------------------------------------------------
+-- Nampower aura identity (knowledge.json / nameplates.nampower_plate_guid_debuffs)
+--
+-- With a GUID, GetUnitField(guid, "aura") lists the unit's debuff spell IDs
+-- (Lua slots 33-48), so a debuff icon resolves to its spell without arming the
+-- tooltip scanner, and AURA_CAST_ON_OTHER gives the player's own casts their
+-- caster-modified duration. Stock clients never reach this table.
+-- ---------------------------------------------------------------------------
+local npAura = {
+  own = {},         -- target GUID -> spellId -> { start, duration }
+  icons = {},       -- spellId -> lower-case icon path, or false
+  names = {},       -- spellId -> spell name, or false
+  ids = {},         -- scratch: this pass's debuff spell IDs
+  nextPrune = 0,
+}
+
+function npAura.Field(name)
+  local fn = npAura[name]
+  if fn == nil then
+    fn = U.hasNampower and U.G(name) or nil
+    if type(fn) ~= "function" then fn = false end
+    npAura[name] = fn
+  end
+  return fn or nil
+end
+
+function npAura.Icon(id)
+  local icon = npAura.icons[id]
+  if icon ~= nil then return icon end
+  icon = false
+  local rec, tex = npAura.Field("GetSpellRecField"),
+                   npAura.Field("GetSpellIconTexture")
+  if rec and tex then
+    local ok, iconId = pcall(rec, id, "spellIconID")
+    if ok and tonumber(iconId) then
+      local okT, path = pcall(tex, iconId)
+      if okT and type(path) == "string" and path ~= "" then
+        icon = string.lower(path)
+      end
+    end
+  end
+  npAura.icons[id] = icon
+  return icon
+end
+
+function npAura.Name(id)
+  local name = npAura.names[id]
+  if name ~= nil then return name or nil end
+  name = false
+  local fn = npAura.Field("GetSpellNameAndRankForId")
+  if fn then
+    local ok, value = pcall(fn, id)
+    if ok and type(value) == "string" and value ~= "" then name = value end
+  end
+  npAura.names[id] = name
+  return name or nil
+end
+
+-- Fills npAura.ids[1..npAura.count] with the unit's debuff spell IDs; false
+-- when unreadable. An explicit count, not table.getn: nil-clearing leaves
+-- getn stale on Lua 5.0 (knowledge.json / lua50.getn_stale_after_nil_clear).
+function npAura.Load(guid)
+  npAura.count = 0
+  local field = npAura.Field("GetUnitField")
+  if not field or not guid then return false end
+  local ok, auras = pcall(field, guid, "aura")
+  if not ok or type(auras) ~= "table" then return false end
+  local ids, n, s = npAura.ids, 0
+  for s = 33, 48 do
+    local id = tonumber(auras[s])
+    if id and id > 0 then
+      n = n + 1
+      ids[n] = id
+    end
+  end
+  npAura.count = n
+  return true
+end
+
+-- The loaded debuff whose icon is this texture, preferring the player's own.
+function npAura.Match(guid, texture)
+  if type(texture) ~= "string" then return nil end
+  local want = string.lower(texture)
+  local own = npAura.own[guid]
+  local found, i
+  for i = 1, npAura.count or 0 do
+    local id = npAura.ids[i]
+    if id and npAura.Icon(id) == want then
+      if own and own[id] then return id end
+      found = found or id
+    end
+  end
+  return found
+end
+
+function npAura.TimeLeft(guid, id, now)
+  local own = npAura.own[guid]
+  local cast = own and own[id]
+  if not cast then return nil end
+  local left = cast.start + cast.duration - now
+  if left <= 0 then
+    own[id] = nil
+    return nil
+  end
+  return left
+end
+
+function npAura.Prune(now)
+  if now < npAura.nextPrune then return end
+  npAura.nextPrune = now + 10
+  local guid, spells, id, cast
+  for guid, spells in pairs(npAura.own) do
+    for id, cast in pairs(spells) do
+      if cast.start + cast.duration < now then spells[id] = nil end
+    end
+    if next(spells) == nil then npAura.own[guid] = nil end
+  end
+end
+
+-- RefreshRow's two entry points, on U so that function stays within its
+-- upvalue budget. The pass loads one unit's debuff IDs; the key names one icon.
+function U.AuraGuidPass(unit, now)
+  local guid = U.UnitGuid(unit)
+  if not guid or not npAura.Load(guid) then return nil end
+  npAura.Prune(now)
+  return guid
+end
+
+function U.AuraGuidKey(guid, texture, now)
+  local id = npAura.Match(guid, texture)
+  if not id then return nil end
+  return npAura.Name(id), npAura.TimeLeft(guid, id, now)
+end
 
 local units = {}      -- unit key -> { helpful = {}, harmful = {}, touched }
 local unitCount = 0
@@ -483,10 +619,14 @@ local function PruneUnits()
 end
 
 local function UnitStore(unit)
-  local name = Call("UnitName", unit)
-  if type(name) ~= "string" or name == "" then return nil end
-
-  local key = name .. "@" .. (tonumber(Call("UnitLevel", unit)) or 0)
+  -- A GUID tells two same-name mobs apart and lets the target row and the
+  -- unit's nameplate share one store.
+  local key = U.UnitGuid(unit)
+  if not key then
+    local name = Call("UnitName", unit)
+    if type(name) ~= "string" or name == "" then return nil end
+    key = name .. "@" .. (tonumber(Call("UnitLevel", unit)) or 0)
+  end
   local store = units[key]
   if not store then
     -- Stamped before PruneUnits runs, not after: the prune compares every
@@ -1415,6 +1555,9 @@ local function RefreshRow(row, offset)
   local native = IsPlayerUnit(row.unit)
   row.native = native
 
+  local guid = row.harmful and not native and U.hasNampower and
+               U.AuraGuidPass(row.unit, now) or nil
+
   passCount = passCount + 1
   local pass = passCount
 
@@ -1456,7 +1599,8 @@ local function RefreshRow(row, offset)
       if native then
         key = tostring(buffIndex) .. ":" .. texture
       else
-        key = AuraName(row, i, texture)
+        if guid then key, timeLeft = U.AuraGuidKey(guid, texture, now) end
+        key = key or AuraName(row, i, texture)
       end
       local entry = TrackAura(bucket, key, count, pass, timeLeft, witnessed)
 
@@ -1878,14 +2022,55 @@ function U.CreateNameplateAuraRows(anchor, parent, id, offsetY)
   return { debuffs = debuffs }
 end
 
-function U.RefreshNameplateAuraRows(pair, active)
+-- `unit` is "target" or, with Nampower, the plate's GUID (default "target").
+function U.RefreshNameplateAuraRows(pair, active, unit)
   if not pair then return end
+  local row = pair.debuffs
   active = active and true or false
-  -- Switched on for a (possibly new) target: the slot names cached for the
+  unit = unit or "target"
+  -- Switched on for a (possibly new) unit: the slot names cached for the
   -- previous one are stale, as on PLAYER_TARGET_CHANGED below.
-  if active and not pair.debuffs.active then pair.debuffs.names = {} end
-  pair.debuffs.active = active
-  RefreshRow(pair.debuffs, 0)
+  if active and (not row.active or row.unit ~= unit) then
+    row.names = {}
+    row.unit = unit
+  end
+  row.active = active
+  RefreshRow(row, 0)
+end
+
+-- Nampower aura events (registering enables them, probe plateaura.v1). Only
+-- the player's own casts get a duration: other casters' talents are unknown.
+local function EnableNampowerAuraEvents()
+  if not U.hasNampower then return end
+  local playerGuid
+  U.RegisterEvent("AURA_CAST_ON_OTHER", function(event, spellId, caster,
+                                                 target, effect, auraName,
+                                                 amplitude, misc, durationMs)
+    playerGuid = playerGuid or U.UnitGuid("player")
+    spellId, durationMs = tonumber(spellId), tonumber(durationMs)
+    if not playerGuid or caster ~= playerGuid or type(target) ~= "string" or
+       not spellId or not durationMs or durationMs <= 0 then return end
+    local spells = npAura.own[target]
+    if not spells then
+      spells = {}
+      npAura.own[target] = spells
+    end
+    spells[spellId] = { start = Now(), duration = durationMs / 1000 }
+  end)
+
+  local function Changed(event, guid, luaSlot, spellId, stacks, level,
+                         auraSlot, state)
+    if type(guid) ~= "string" then return end
+    if event == "DEBUFF_REMOVED_OTHER" and tonumber(state) == 1 then
+      local spells = npAura.own[guid]
+      if spells and tonumber(spellId) then spells[tonumber(spellId)] = nil end
+    end
+    if type(U.NameplateAuraChanged) == "function" then
+      U.NameplateAuraChanged(guid)
+    end
+  end
+  U.RegisterEvent("DEBUFF_ADDED_OTHER", Changed)
+  U.RegisterEvent("DEBUFF_REMOVED_OTHER", Changed)
 end
 
 -- ---------------------------------------------------------------------------
@@ -2168,6 +2353,7 @@ function A:OnEnable()
   -- (events.json); PLAYER_AURAS_CHANGED registered but was never seen, so it is
   -- registered as a free accelerator rather than relied on.
   U.RegisterEvent("UNIT_AURA", function(event, unit) RefreshUnitToken(unit) end)
+  EnableNampowerAuraEvents()
   U.RegisterEvent("PLAYER_AURAS_CHANGED", function()
     RefreshPlayer()
   end)

@@ -91,10 +91,123 @@ local function EnsureConfig()
   if not config then
     config = U.ModuleConfig("bags",
                             { enabled = true, categories = false,
+                              bagScale = 100, bankScale = 100,
+                              bagResized = false, bagColumns = COLUMNS,
+                              bagHeight = 0,
+                              bankResized = false, bankColumns = COLUMNS,
+                              bankHeight = 0,
                               collapsed = {}, collapsedBank = {},
                               specialOffsets = {} })
   end
   return config
+end
+
+-- The carried-bag and bank windows are dragged directly rather than registered
+-- as edit-mode movers, so their two scales live with the bag-family settings.
+-- Keep the same 50-200%, 5-point range as the edit-mode Scale (%) control.
+local function WindowScale(value)
+  value = tonumber(value) or 100
+  value = math.floor(value / 5 + 0.5) * 5
+  if value < 50 then value = 50 end
+  if value > 200 then value = 200 end
+  return value
+end
+
+function U.BagWindowScaleRange()
+  return 50, 200, 5
+end
+
+function U.GetBagWindowScale()
+  return WindowScale(EnsureConfig().bagScale)
+end
+
+function U.GetBankWindowScale()
+  return WindowScale(EnsureConfig().bankScale)
+end
+
+-- Shared by this file, modules/bank.lua and modules/bankview.lua. Stored
+-- offsets are in the window's own units on 1.12, so convert them by old/new
+-- scale just like core/mover.lua does. A window still on its default position
+-- is simply placed again, avoiding an invented saved position.
+function U.ApplyBagFamilyWindowScale(window, id, oldPercent, newPercent, place)
+  if not window then return false end
+  oldPercent = WindowScale(oldPercent)
+  newPercent = WindowScale(newPercent)
+  if not pcall(window.SetScale, window, newPercent / 100) then return false end
+
+  local position = U.GetPosition(id)
+  if position and oldPercent ~= newPercent then
+    local ratio = oldPercent / newPercent
+    U.SavePosition(id, position.point, position.relativePoint,
+                   (tonumber(position.x) or 0) * ratio,
+                   (tonumber(position.y) or 0) * ratio)
+  end
+  if type(place) == "function" then place() end
+  U.CheckOnScreen(window)
+  return true
+end
+
+function U.SetBagWindowScale(value)
+  local settings = EnsureConfig()
+  local old = WindowScale(settings.bagScale)
+  local new = WindowScale(value)
+  settings.bagScale = new
+  if old ~= new and type(U.ApplyBagWindowScale) == "function" then
+    U.ApplyBagWindowScale(old, new)
+  end
+  return new
+end
+
+function U.SetBankWindowScale(value)
+  local settings = EnsureConfig()
+  local old = WindowScale(settings.bankScale)
+  local new = WindowScale(value)
+  settings.bankScale = new
+  if old ~= new then
+    if type(U.ApplyLiveBankWindowScale) == "function" then
+      U.ApplyLiveBankWindowScale(old, new)
+    end
+    if type(U.ApplySavedBankWindowScale) == "function" then
+      U.ApplySavedBankWindowScale(old, new)
+    end
+  end
+  return new
+end
+
+-- The three bag-family windows share two geometry stores: one for carried
+-- bags, one for both live and saved bank views.
+function U.GetBagFamilyWindowGeometry(kind)
+  local settings = EnsureConfig()
+  if kind == "bank" then
+    return tonumber(settings.bankColumns) or COLUMNS,
+           tonumber(settings.bankHeight) or 0,
+           settings.bankResized and true or false
+  end
+  return tonumber(settings.bagColumns) or COLUMNS,
+         tonumber(settings.bagHeight) or 0,
+         settings.bagResized and true or false
+end
+
+function U.SetBagFamilyWindowGeometry(kind, columns, height)
+  local settings = EnsureConfig()
+  columns = math.floor((tonumber(columns) or COLUMNS) + 0.5)
+  height = math.floor((tonumber(height) or 0) + 0.5)
+  if kind == "bank" then
+    settings.bankColumns = columns
+    settings.bankHeight = height
+    settings.bankResized = true
+  else
+    settings.bagColumns = columns
+    settings.bagHeight = height
+    settings.bagResized = true
+  end
+  return columns, height
+end
+
+function U.BagFamilyWindowHeight(kind, natural)
+  local _, requested, resized = U.GetBagFamilyWindowGeometry(kind)
+  if resized and requested > natural then return requested end
+  return natural
 end
 
 -- The persisted collapsed-category table of one window: "bank" for the bank,
@@ -108,7 +221,7 @@ function U.BagsEnabled()
   return EnsureConfig().enabled and true or false
 end
 
--- The two settings this module owns have two views each: the Bags page in the
+-- The enable and category settings have two views each: the Bags page in the
 -- settings window, and the panel on the bag bar's edit-mode anchor
 -- (modules/bagbar.lua). Both go through these, so the reload prompt and the
 -- redraw belong to the setting rather than being written out twice.
@@ -988,7 +1101,7 @@ local function UpdateSlotAppearance(bag, slot)
     return
   end
 
-  U.UpdateItemSlot(button, bag, slot)
+  U.UpdateItemSlot(button, bag, slot, link)
   -- The single funnel every layout and refresh path already goes through, so
   -- the favourite star follows item movement, sorting and stack changes with
   -- nothing else to keep in step.
@@ -1565,20 +1678,56 @@ function specialBag.Layout(list)
   end
 end
 
+local resizeBag
+
 local function LayoutCategories()
   SetSortButtonShown(false)
   specialBag.HideAll()
+
+  local columns = resizeBag.Geometry()
+  catView.host.columns = columns
   catView.Layout()
 end
 
 -- ---------------------------------------------------------------------------
 -- Layout
 -- ---------------------------------------------------------------------------
+resizeBag = { MIN_COLUMNS = 7, MAX_COLUMNS = 64 }
+
+function resizeBag.MaxColumns()
+  if not anchor then return resizeBag.MAX_COLUMNS end
+  local gap = classicBag.SlotGap()
+  local pitch = SLOT_SIZE + gap
+  local width = U.UIWidth() / U.FrameUIRatio(anchor)
+  local columns = math.floor((width - classicBag.SidePad() * 2 + gap) / pitch)
+  return math.max(resizeBag.MIN_COLUMNS,
+                  math.min(resizeBag.MAX_COLUMNS, columns))
+end
+
+function resizeBag.Geometry()
+  local columns, height, resized = U.GetBagFamilyWindowGeometry("bag")
+  columns = math.floor(columns + 0.5)
+  columns = math.max(resizeBag.MIN_COLUMNS,
+                     math.min(resizeBag.MaxColumns(), columns))
+  return columns, height, resized
+end
+
+function resizeBag.Width(columns)
+  local gap = classicBag.SlotGap()
+  return columns * (SLOT_SIZE + gap) - gap + classicBag.SidePad() * 2
+end
+
+function resizeBag.Height(natural)
+  return U.BagFamilyWindowHeight("bag", natural)
+end
+
 local function LayoutSlots()
   local x, y = 0, 0
   local slotGap = classicBag.SlotGap()
   local specials = {}
   local i
+
+  local columns = resizeBag.Geometry()
 
   -- Switching back out of the category view leaves its boxes and its header
   -- readout behind otherwise; the slot buttons themselves are re-anchored below.
@@ -1610,7 +1759,7 @@ local function LayoutSlots()
         UpdateSlotAppearance(bag, slot)
         button:Show()
 
-        if x >= COLUMNS - 1 then
+        if x >= columns - 1 then
           x, y = 0, y + 1
         else
           x = x + 1
@@ -1636,11 +1785,10 @@ local function LayoutSlots()
 
   -- The anchor owns the rect; the visible frame is stretched over it, so the
   -- stored placement keeps the same bounds whether or not the bag is open.
-  anchor:SetWidth(COLUMNS * (SLOT_SIZE + slotGap) - slotGap +
-                  classicBag.SidePad() * 2)
-  anchor:SetHeight(BagHeaderHeight() + BagFooterHeight() +
-                   y * (SLOT_SIZE + slotGap) - slotGap
-                   + PADDING)
+  anchor:SetWidth(resizeBag.Width(columns))
+  local natural = BagHeaderHeight() + BagFooterHeight() +
+                  y * (SLOT_SIZE + slotGap) - slotGap + PADDING
+  anchor:SetHeight(resizeBag.Height(natural))
   modernBag.ResizePanel(frame)
 end
 
@@ -1706,6 +1854,27 @@ local function ProcessDirty()
     end
   end
 
+end
+
+function resizeBag.Resize(width, height)
+  local gap = classicBag.SlotGap()
+  local pitch = SLOT_SIZE + gap
+  local inset = 0
+  if EnsureConfig().categories then
+    inset = U.ModernWowBagMetric("sectionInset", M.bagCategory.inset) * 2
+  end
+  local columns = math.floor((width - classicBag.SidePad() * 2 - inset + gap) /
+                             pitch + 0.5)
+  columns = math.max(resizeBag.MIN_COLUMNS,
+                     math.min(resizeBag.MaxColumns(), columns))
+
+  local minimum = BagHeaderHeight() + BagFooterHeight() + PADDING + SLOT_SIZE
+  local maximum = U.UIHeight() / U.FrameUIRatio(anchor)
+  height = math.floor((tonumber(height) or minimum) + 0.5)
+  height = math.max(minimum, math.min(maximum, height))
+  U.SetBagFamilyWindowGeometry("bag", columns, height)
+  layoutDirty = true
+  ProcessDirty()
 end
 
 local function MarkAllBagsDirty()
@@ -2066,8 +2235,31 @@ local function ApplyBagPosition()
     U.Debug("bags: failed to apply position")
     return false
   end
-  U.PinFrameToBottomEdge(BAG_POSITION_ID, anchor, BAG_DEFAULT_POSITION)
+  local _, _, resized = U.GetBagFamilyWindowGeometry("bag")
+  if not resized then
+    U.PinFrameToBottomEdge(BAG_POSITION_ID, anchor, BAG_DEFAULT_POSITION)
+  end
   return true
+end
+
+function U.ApplyBagWindowScale(oldPercent, newPercent)
+  return U.ApplyBagFamilyWindowScale(anchor, BAG_POSITION_ID, oldPercent,
+                                     newPercent, ApplyBagPosition)
+end
+
+function resizeBag.Build()
+  frame.resizeGrip = U.BuildBagResizeGrip({
+    window = frame,
+    target = anchor,
+    name = "PandaUIBagResizeGrip",
+    id = BAG_POSITION_ID,
+    updateId = "bags.resize",
+    onResize = resizeBag.Resize,
+    onStop = function()
+      layoutDirty = true
+      ProcessDirty()
+    end,
+  })
 end
 
 local function StartBagDrag()
@@ -2098,7 +2290,9 @@ local function StopBagDrag()
     U.Debug("bags: no readable position after drag")
     return
   end
-  if U.SavePosition(BAG_POSITION_ID, p.point, p.relativePoint, p.x, p.y) then
+  local _, _, resized = U.GetBagFamilyWindowGeometry("bag")
+  if U.SavePosition(BAG_POSITION_ID, p.point, p.relativePoint, p.x, p.y) and
+     not resized then
     U.PinFrameToBottomEdge(BAG_POSITION_ID, anchor, BAG_DEFAULT_POSITION)
   end
   U.CheckOnScreen(anchor)
@@ -2131,6 +2325,7 @@ local function Build()
   -- panel, so a drag cannot break that relationship.
   local slotGap = classicBag.SlotGap()
   anchor = CreateFrame("Frame", "PandaUIBagAnchor", UIParent)
+  pcall(anchor.SetScale, anchor, U.GetBagWindowScale() / 100)
   anchor:SetWidth(COLUMNS * (SLOT_SIZE + slotGap) - slotGap +
                   classicBag.SidePad() * 2)
   anchor:SetHeight(BagHeaderHeight() + BagFooterHeight() +
@@ -2190,7 +2385,8 @@ local function Build()
     end,
     onLayout = function(width, height)
       anchor:SetWidth(width + classicBag.SidePad() * 2)
-      anchor:SetHeight(BagHeaderHeight() + height + PADDING + BagFooterHeight())
+      local natural = BagHeaderHeight() + height + PADDING + BagFooterHeight()
+      anchor:SetHeight(U.BagFamilyWindowHeight("bag", natural))
       modernBag.ResizePanel(frame)
     end,
   })
@@ -2262,6 +2458,11 @@ local function BuildSettingsPage(parent)
   })
   table.insert(widgets, header)
 
+  -- The resize tip sits on the window's title line, right of "Panda UI vX".
+  local resizeHint = U.CreateIntegratedSettingsHeaderNote(
+    U.L("SETTINGS_BAGS_RESIZE_HINT"))
+  if resizeHint then table.insert(widgets, resizeHint) end
+
   local enable = U.CreateCheckbox(parent, {
     name = "PandaUISettingsBagsEnable",
     text = U.L("SETTINGS_BAGS_ENABLE"),
@@ -2313,6 +2514,35 @@ local function BuildSettingsPage(parent)
     table.insert(widgets, categoriesHint)
   end
 
+  local scaleMin, scaleMax, scaleStep = U.BagWindowScaleRange()
+  local scaleAnchor = categoriesHint or categories.box
+  local bagScale = U.CreateSlider(parent, {
+    name = "PandaUISettingsBagScale",
+    text = U.L("SETTINGS_BAGS_SCALE"),
+    width = U.SETTINGS_COLUMN_WIDTH,
+    min = scaleMin,
+    max = scaleMax,
+    step = scaleStep,
+    value = U.GetBagWindowScale(),
+    onChange = function(value) U.SetBagWindowScale(value) end,
+  })
+  bagScale.SetPoint("TOPLEFT", scaleAnchor, "BOTTOMLEFT", 0, -28)
+  table.insert(widgets, bagScale)
+
+  local bankScale = U.CreateSlider(parent, {
+    name = "PandaUISettingsBankScale",
+    text = U.L("SETTINGS_BANK_SCALE"),
+    width = U.SETTINGS_COLUMN_WIDTH,
+    min = scaleMin,
+    max = scaleMax,
+    step = scaleStep,
+    value = U.GetBankWindowScale(),
+    onChange = function(value) U.SetBankWindowScale(value) end,
+  })
+  bankScale.SetPoint("TOPLEFT", scaleAnchor, "BOTTOMLEFT",
+                     U.SETTINGS_COLUMN_X, -28)
+  table.insert(widgets, bankScale)
+
   -- The HUD bag bar (modules/bagbar.lua) stands in for this window while the
   -- module above is off -- and under modern-wow stays beside it while it is on
   -- -- so its one switch belongs on this page rather than on a tab of its own.
@@ -2332,11 +2562,10 @@ local function BuildSettingsPage(parent)
       U.SetBagBarEnabled(value)
     end,
   })
-  if categoriesHint then
-    bar.SetPoint("TOPLEFT", categoriesHint, "BOTTOMLEFT", 0, -12)
-  else
-    bar.SetPoint("TOPLEFT", categories.box, "BOTTOMLEFT", 0, -12)
-  end
+  -- The track's left edge is the page's left edge in every slider style; the
+  -- value box moves (under the track or beside it), so it is no anchor here.
+  -- 28 clears a value box drawn under the track.
+  bar.SetPoint("TOPLEFT", bagScale.track, "BOTTOMLEFT", 0, -28)
   table.insert(widgets, bar)
 
   local barHint = U.CreateSettingsLabel(parent, {
@@ -2355,6 +2584,8 @@ local function BuildSettingsPage(parent)
   local function Refresh()
     enable.SetValue(U.BagsEnabled())
     categories.SetValue(U.BagsCategoriesEnabled())
+    bagScale.SetValue(U.GetBagWindowScale())
+    bankScale.SetValue(U.GetBankWindowScale())
     if U.BagBarEnabled then bar.SetValue(U.BagBarEnabled()) end
   end
 
@@ -2377,6 +2608,7 @@ function BG:OnEnable()
   InstallToggleOverrides()
   classicBag.Capture()
   Build()
+  resizeBag.Build()
 
   U.RegisterEvent("PLAYER_ENTERING_WORLD", function() layoutDirty = true end)
 

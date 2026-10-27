@@ -2,7 +2,7 @@
 ## Title: |cffffffffPanda |cfff5ae0aUI
 ## Notes: UI addon for the OctoWoW client (1.12.1, Lua 5.0), ported from UnrealUI.
 ## Author: Thomas
-## Version: 0.12.1
+## Version: 0.12.2
 ## X-Ported-From: UnrealUI 0.10.2
 ## X-License: MIT
 ## SavedVariables: PandaUIDB, PandaUIProfiles, PandaUIDiagDB, PandaUIPriceDB
@@ -35,10 +35,9 @@ core\auradata.lua
 core\hotdata.lua
 core\pricedata.lua
 
-# Bundled VMaNGOS world data. Both tables hang off the addon table the way
-# core\pricedata.lua does, so pandaUI owns them outright and exact vitals work
-# with no sibling addon installed. core\unitvitals.lua is the code that reads
-# them, and needs U.Round from core\compat.lua only at call time.
+# Bundled offline world data. The creature tables come from VMaNGOS; item sort
+# and NPC cast data include Turtle WoW custom templates. The tables hang off
+# the addon table the way core\pricedata.lua does, so pandaUI owns them outright.
 #
 # The three name files are alternatives, not additions: each one returns at its
 # first line unless GetLocale names it, so exactly one builds a table and the
@@ -48,6 +47,7 @@ Database\unit_vitals.lua
 Database\unit_names.lua
 Database\unit_names_ruRU.lua
 Database\unit_names_zhCN.lua
+Database\cast_spells.lua
 Database\item_sort.lua
 Database\talent_advisor.lua
 core\unitvitals.lua
@@ -144,6 +144,10 @@ modules\loot.lua
 modules\lootdesign.lua
 modules\castbarclassic.lua
 modules\castbar.lua
+# Exactly one target-cast backend registers: stock combat text without
+# Nampower, or Nampower events plus that same combat-text fallback with it.
+modules\castbartargetstock.lua
+modules\castbartargetnampower.lua
 modules\actionbar.lua
 modules\actionbarconfig.lua
 modules\quickbind.lua

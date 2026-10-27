@@ -3821,7 +3821,10 @@ function mw.ResizeSplitWindow(frame)
   local leftWidth = width * (state.split or mw.quadrant.split)
 
   state.left:ClearAllPoints()
-  state.left:SetWidth(leftWidth)
+  -- The independently rasterised halves can leave one dark screen pixel at
+  -- their fractional boundary. Let the left art run beneath the right while
+  -- keeping the authored split and every control calculation unchanged.
+  state.left:SetWidth(leftWidth + (state.seamOverlap or 0))
   state.left:SetHeight(height)
   state.left:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
 
@@ -3884,6 +3887,7 @@ function mw.DressWindow(frame, entry)
       left = left,
       right = right,
       split = crop and crop.split,
+      seamOverlap = crop and crop.seamOverlap,
     }
     mw.ResizeSplitWindow(frame)
     return frame.puiModernWowWindow

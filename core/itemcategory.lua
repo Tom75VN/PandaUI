@@ -18,9 +18,9 @@
 -- builds on, and every client call stays inside pcall.
 --
 -- Database/item_sort.lua is the primary classification for every template in
--- the bundled VMaNGOS 1.12.1 snapshot. Its numeric class/subclass and
--- profession-graph derivation are deeper and locale independent. The live
--- signals below remain the deliberate fallback for custom or future items:
+-- the bundled Turtle WoW snapshot. Its numeric class/subclass and profession-
+-- graph derivation are deeper and locale independent. The live signals below
+-- remain the deliberate fallback for items newer than that snapshot:
 --   1. no item in the slot            -> empty
 --   2. GetItemInfo gave nothing       -> unknown
 --   3. quality 0                      -> junk  (the bag's own grey-vendor rule)

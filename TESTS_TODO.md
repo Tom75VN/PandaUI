@@ -19,15 +19,16 @@ Knowledge records: `perf.pandaui_only_stutter`,
 
 - [ ] S6. Stutter in the mine with all addons (reported 2026-10-26). Probe `PandaRuntimeProbe/AddonStutterProbe.lua`, group `addonstutter` (splits the stutter per addon). Relaunch once (new TOC file), go to the mine spot where it stutters, all addons enabled, play normally, `/prp addonstutter` (~200 s, addons blink off/on in its second half), then `/prp reload` after "results saved". Report any Lua error.
 
-## Raid-style party frames (coded 2026-10-26)
+## Character statistics (coded 2026-10-27)
 
-Code: `modules/raidframes.lua` (party block), `modules/unitframes.lua`
-(`partyRaidStyle`). Knowledge record: `raidframes.pandaui_forever_compact_unverified`.
+Code: `modules/characterstats.lua`, `modules/characterstatspanel.lua`.
+Knowledge record: `characterstats.bettercharacterstats_three_theme_layout_unverified`.
 
-- [ ] RP1. modern-wow: Unit Frames > Party Frames, tick "Draw party frames like the raid frames". In a party (or `/pui party test`) the party shows as raid cells in one column, player on top; old party rows gone.
-- [ ] RP2. Edit mode: the Party handle covers the column and moves it; the Party panel has "Raid-style frames" and it switches live.
-- [ ] RP3. Left-click targets, right-click opens the party menu, HoTs and debuffs show like the raid frames.
-- [ ] RP4. classic-wow (Modern WoW party module off): tick the option, `/reload`; the client's party frames are gone and the raid cells show. Untick, `/reload`: client frames back.
+- [ ] C1. Classic WoW: open Character. Two native dropdown columns appear below the model without covering slots; Base Stats and Melee are selected initially.
+- [ ] C2. Classic WoW: each dropdown independently selects Base Stats, Melee, Ranged, Spell, Spell Schools and Defenses; every page has six rows and hover details work.
+- [ ] C3. Modern and Modern WoW: Character Stats stays on the right-side panel and includes Spell Schools, Spell Haste and Total Avoidance.
+- [ ] C4. With identical gear, talents, buffs and debuffs, compare hit, crit, spell-school power, healing, mana regeneration, spell haste, block value and total avoidance against BetterCharacterStats. No calculated row should show a question mark; report both values for any mismatch.
+- [ ] C5. Equip or remove one stat item, temporary weapon oil or aura while Character is open: all three themes refresh within one second and no Lua error appears.
 
 ## Edit mode alignment guides (coded 2026-10-25, v4 confirmed in game 2026-10-26)
 
@@ -147,10 +148,3 @@ Code: `modules/nameplates.lua`, `modules/nameplatesettings.lua`,
 
 - [ ] 47. In a crowded area (30+ plates): no stutter, no Lua errors.
 - [ ] 48. Plates update correctly after zoning, dying and `/reload`.
-
-## Action bar slot background per bar (coded 2026-10-26)
-
-Code: `modules/actionbar.lua` (`modernWowAction.SyncFace`, `classicAction.ApplySlotFill`), `modules/actionbarconfig.lua`.
-
-- [ ] SB1. modern-wow: `/reload`, enable bars 2 and 3. Settings > ActionBars > Bar 2: tick "Show Slot Background"; bar 2 slots get Bar 1's filled plate, bar 3 stays unfilled. Untick: plate goes, icons widen to the ring. Same from the edit-mode bar panel.
-- [ ] SB2. classic-wow (Action Bar 1 only or any bar 2-10): tick it on bar 2; its empty slots show the dark stock slot fill, filled slots look normal. Untick restores the old look. Report if nothing changes or a slot goes blank.

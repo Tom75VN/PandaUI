@@ -647,6 +647,38 @@ end
 -- from the carried bags' (U.BagsCategoryCollapsed("bank")).
 local catView
 
+modernBank.MIN_COLUMNS = 7
+modernBank.MAX_COLUMNS = 64
+
+function modernBank.MaxColumns()
+  if not anchor then return modernBank.MAX_COLUMNS end
+  local gap = modernBank.SlotGap()
+  local pitch = SLOT_SIZE + gap
+  local width = U.UIWidth() / U.FrameUIRatio(anchor)
+  local columns = math.floor((width - modernBank.SidePad() * 2 + gap) / pitch)
+  return math.max(modernBank.MIN_COLUMNS,
+                  math.min(modernBank.MAX_COLUMNS, columns))
+end
+
+function modernBank.Geometry()
+  local columns, height, resized = U.GetBagFamilyWindowGeometry("bank")
+  columns = math.floor(columns + 0.5)
+  columns = math.max(modernBank.MIN_COLUMNS,
+                     math.min(modernBank.MaxColumns(), columns))
+  return columns, height, resized
+end
+
+function modernBank.Width(columns)
+  local gap = modernBank.SlotGap()
+  return columns * (SLOT_SIZE + gap) - gap + modernBank.SidePad() * 2
+end
+
+function modernBank.Height(natural)
+  local _, requested, resized = U.GetBagFamilyWindowGeometry("bank")
+  if resized and requested > natural then return requested end
+  return natural
+end
+
 function modernBank.CategoriesWanted()
   return type(U.BagsEnabled) == "function" and U.BagsEnabled() and
          type(U.BagsCategoriesEnabled) == "function" and
@@ -704,6 +736,9 @@ end
 function modernBank.LayoutCategories()
   local bags = BankBags()
   modernBank.HideGoneBags(bags)
+
+  local columns = modernBank.Geometry()
+  catView.host.columns = columns
   local _, _, total = catView.Layout()
   return total or 0
 end
@@ -722,6 +757,8 @@ local function LayoutSlots()
   local x, y = 0, 0
   local gap = modernBank.SlotGap()
   local i
+
+  local columns = modernBank.Geometry()
 
   for i = 1, table.getn(bags) do
     local bag = bags[i]
@@ -742,7 +779,7 @@ local function LayoutSlots()
         button:Show()
         placed = placed + 1
 
-        if x >= COLUMNS - 1 then
+        if x >= columns - 1 then
           x, y = 0, y + 1
         else
           x = x + 1
@@ -776,10 +813,10 @@ local function LayoutSlots()
 
   -- The anchor owns the rect; the visible frame is stretched over it, so the
   -- mover handle keeps the same bounds whether or not the bank is open.
-  anchor:SetWidth(COLUMNS * (SLOT_SIZE + gap) - gap +
-                  modernBank.SidePad() * 2)
-  anchor:SetHeight(modernBank.Header() + y * (SLOT_SIZE + gap) - gap +
-                   modernBank.BottomPad())
+  anchor:SetWidth(modernBank.Width(columns))
+  local natural = modernBank.Header() + y * (SLOT_SIZE + gap) - gap +
+                  modernBank.BottomPad()
+  anchor:SetHeight(modernBank.Height(natural))
   if modernBank.Active() then U.ModernWowBagHousing(frame) end
 
   return placed
@@ -844,6 +881,33 @@ local function ProcessDirty()
         end
       end
     end
+  end
+end
+
+function U.RefreshLiveBankWindowGeometry()
+  layoutDirty = true
+  if frame and frame:IsShown() then ProcessDirty() end
+end
+
+function modernBank.Resize(width, height)
+  local gap = modernBank.SlotGap()
+  local pitch = SLOT_SIZE + gap
+  local inset = 0
+  if modernBank.CategoriesWanted() then
+    inset = U.ModernWowBagMetric("sectionInset", M.bagCategory.inset) * 2
+  end
+  local columns = math.floor((width - modernBank.SidePad() * 2 - inset + gap) /
+                             pitch + 0.5)
+  columns = math.max(modernBank.MIN_COLUMNS,
+                     math.min(modernBank.MaxColumns(), columns))
+  local minimum = modernBank.Header() + modernBank.BottomPad() + SLOT_SIZE
+  local maximum = U.UIHeight() / U.FrameUIRatio(anchor)
+  height = math.floor((tonumber(height) or minimum) + 0.5)
+  height = math.max(minimum, math.min(maximum, height))
+  U.SetBagFamilyWindowGeometry("bank", columns, height)
+  U.RefreshLiveBankWindowGeometry()
+  if type(U.RefreshSavedBankWindowGeometry) == "function" then
+    U.RefreshSavedBankWindowGeometry()
   end
 end
 
@@ -980,6 +1044,23 @@ local function ApplyBankPosition()
   return true
 end
 
+function U.ApplyLiveBankWindowScale(oldPercent, newPercent)
+  return U.ApplyBagFamilyWindowScale(anchor, BANK_POSITION_ID, oldPercent,
+                                     newPercent, ApplyBankPosition)
+end
+
+function modernBank.BuildResize()
+  frame.resizeGrip = U.BuildBagResizeGrip({
+    window = frame,
+    target = anchor,
+    name = "PandaUIBankResizeGrip",
+    id = BANK_POSITION_ID,
+    updateId = "bank.resize",
+    onResize = modernBank.Resize,
+    onStop = U.RefreshLiveBankWindowGeometry,
+  })
+end
+
 local function StartBankDrag()
   if not pcall(anchor.SetMovable, anchor, true) then
     U.Error("bank: SetMovable failed; the bank cannot be moved")
@@ -1065,6 +1146,7 @@ local function Build()
   -- bank while the bank is closed.
   local gap = modernBank.SlotGap()
   anchor = CreateFrame("Frame", "PandaUIBankAnchor", UIParent)
+  pcall(anchor.SetScale, anchor, U.GetBankWindowScale() / 100)
   anchor:SetWidth(COLUMNS * (SLOT_SIZE + gap) - gap + modernBank.SidePad() * 2)
   anchor:SetHeight(modernBank.Header() + 4 * (SLOT_SIZE + gap) - gap +
                    modernBank.BottomPad())
@@ -1140,7 +1222,8 @@ local function Build()
     onDropped = function() layoutDirty = true end,
     onLayout = function(width, height)
       anchor:SetWidth(width + modernBank.SidePad() * 2)
-      anchor:SetHeight(modernBank.Header() + height + modernBank.BottomPad())
+      local natural = modernBank.Header() + height + modernBank.BottomPad()
+      anchor:SetHeight(modernBank.Height(natural))
       if modernBank.Active() then U.ModernWowBagHousing(frame) end
     end,
   })
@@ -1203,6 +1286,7 @@ function BK:OnEnable()
   if frame then return end
 
   Build()
+  modernBank.BuildResize()
   NeutraliseNativeBank()
   SuppressNativeBankParts()
 

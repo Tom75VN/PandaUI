@@ -4,13 +4,12 @@
 -- and a mover anchor so the minimap cluster can be dragged in pandaUI's edit
 -- mode.
 --
--- The map surface and its behavior stay native. Under the full Modern WoW
--- theme or Classic's explicit Minimap selection, the stock decorative ring,
--- zone bed and zoom-button faces are replaced with that theme's authored
--- textures, and the close button and clock are removed. `modern` takes the
--- same path without the round border (user request, 2026-09-28). The pending-mail
--- letter is not part of that: it is pandaUI's animated flipbook under every
--- theme (see "The pending-mail letter" below). knowledge.json /
+-- The map surface and its behavior stay native. Modern gives it a square mask
+-- and the flat PandaUI panel treatment. Modern WoW, or Classic's explicit
+-- Minimap selection, replaces the stock chrome with its authored round-map
+-- textures. The pending-mail letter is not part of either path: it is
+-- pandaUI's animated flipbook under every theme (see "The pending-mail letter"
+-- below). knowledge.json /
 -- minimap.render_pass_under_ordinary_frames says the map surface is drawn in a
 -- special pass beneath ordinary frames, which is why the new shadow is alpha-
 -- only over the map.
@@ -39,6 +38,7 @@ local MINIMAP_HIGHLIGHT = "Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight"
 -- clear it: the button is now fixed to the minimap.
 local POSITION_ID = "minimapbutton"
 
+local modernFlatMinimap = { dressed = false }
 local modernWowMinimap = { dressed = false }
 
 local function ModernWow()
@@ -46,9 +46,7 @@ local function ModernWow()
          U.ModernWowModuleEnabled("minimap")
 end
 
--- `modern` draws the same minimap as Modern WoW minus its round border (user
--- request, 2026-09-28): stock ring stripped, shadow, zone panel, zoom buttons
--- and mail placement kept. A sanctioned exception to the `modern` freeze.
+-- The flat Modern theme owns a separate square drawing path.
 local function ModernFlat()
   return U.GetActiveThemeStyle() == "modern"
 end
@@ -123,14 +121,112 @@ local function DressZoomButton(button, normal, over, pushed, disabled)
   return true
 end
 
+local function KeepZoneLabelFresh(label, updateId, interval)
+  if not label then return end
+  local lastZone
+  local function RefreshZone()
+    if type(GetMinimapZoneText) ~= "function" then return end
+    local ok, zone = pcall(GetMinimapZoneText)
+    if not ok or type(zone) ~= "string" or zone == lastZone then return end
+    lastZone = zone
+    pcall(label.SetText, label, zone)
+  end
+  RefreshZone()
+  U.RegisterEvent("PLAYER_ENTERING_WORLD", RefreshZone)
+  U.RegisterEvent("ZONE_CHANGED", RefreshZone)
+  U.RegisterEvent("ZONE_CHANGED_INDOORS", RefreshZone)
+  U.RegisterEvent("ZONE_CHANGED_NEW_AREA", RefreshZone)
+  U.RegisterUpdate(updateId, interval, RefreshZone)
+end
+
+-- pfUI-octo uses an all-white 8x8 texture as Minimap's mask. WHITE8X8 is the
+-- same shape, so Modern can become square without shipping another asset.
+local function DressModernFlatMinimap()
+  if modernFlatMinimap.dressed or not ModernFlat() then return false end
+
+  local minimap = U.G("Minimap")
+  local layout = M.minimapModern
+  if not minimap or not layout or type(minimap.SetMaskTexture) ~= "function" then
+    U.Debug("modern minimap: square mask unavailable; native map retained")
+    return false
+  end
+  if not pcall(minimap.SetMaskTexture, minimap, layout.maskTexture) then
+    U.Debug("modern minimap: square mask failed; native map retained")
+    return false
+  end
+
+  HideStockChrome()
+  U.CreateBorder(minimap, layout.borderSize)
+  U.SetBorderColor(minimap, M.Unpack(M.color.border))
+
+  local width = 140
+  local ok, liveWidth = pcall(minimap.GetWidth, minimap)
+  if ok and type(liveWidth) == "number" and liveWidth > 0 then width = liveWidth end
+
+  local panel = U.CreatePanel(minimap, {
+    name = "PandaUIModernMinimapTopPanel",
+    width = width,
+    height = layout.topPanelHeight,
+    background = M.color.background,
+    border = M.color.border,
+    thickness = layout.borderSize,
+  })
+  panel:SetPoint("BOTTOM", minimap, "TOP", 0, layout.topPanelGap)
+
+  local zoneLabel = U.CreateLabel(panel, {
+    name = "PandaUIModernMinimapZoneText",
+    inherits = "GameFontNormal",
+    size = layout.zoneFontSize,
+    color = M.color.accent,
+    justify = "CENTER",
+    width = width - layout.topPanelInset * 2,
+    exactSize = true,
+  })
+  if zoneLabel then
+    pcall(zoneLabel.SetPoint, zoneLabel, "CENTER", panel, "CENTER", 0,
+      layout.zoneY)
+    KeepZoneLabelFresh(zoneLabel, "minimap.modern.zone", layout.zoneRefresh)
+  end
+
+  -- Modern keeps mouse-wheel zoom, without the visible native +/- controls.
+  ClearButtonArt(U.G("MinimapZoomIn"))
+  ClearButtonArt(U.G("MinimapZoomOut"))
+
+  local mailFrame = U.G("MiniMapMailFrame")
+  if mailFrame then
+    pcall(mailFrame.ClearAllPoints, mailFrame)
+    pcall(mailFrame.SetPoint, mailFrame, "TOPRIGHT", minimap, "TOPRIGHT",
+      -layout.mailInset, -layout.mailInset)
+  end
+
+  modernFlatMinimap.dressed = true
+  modernFlatMinimap.zoneLabel = zoneLabel
+  modernFlatMinimap.topPanel = panel
+  U.Debug("modern minimap: flat square chrome applied")
+  return true
+end
+
+-- Classic and Modern WoW keep the round map. The client does not reset the
+-- minimap mask when the UI reloads, so a square mask applied under Modern would
+-- survive the reload a theme change needs; put the stock round one back.
+local function RestoreRoundMinimapMask()
+  if ModernFlat() then return false end
+  local minimap = U.G("Minimap")
+  if not minimap or type(minimap.SetMaskTexture) ~= "function" then return false end
+  if not pcall(minimap.SetMaskTexture, minimap, M.minimapRoundMask) then
+    U.Debug("minimap: round mask restore failed")
+    return false
+  end
+  return true
+end
+
 -- Complete modern-wow drawing path. The imported layout is working-source
 -- evidence from DragonflightUI-Reforged; every client-owned object remains
 -- capability-checked because only MinimapZoomIn is named in official client
 -- documentation and the other exact globals are not runtime-verified here.
 local function DressModernWowMinimap()
   if modernWowMinimap.dressed then return false end
-  local withBorder = ModernWow()
-  if not withBorder and not ModernFlat() then return false end
+  if not ModernWow() then return false end
 
   local minimap = U.G("Minimap")
   local art = M.modernWow and M.modernWow.texture
@@ -139,15 +235,12 @@ local function DressModernWowMinimap()
 
   HideStockChrome()
 
-  local border
-  if withBorder then
-    border = minimap:CreateTexture(nil, "OVERLAY")
-    border:SetTexture(art.minimapBorder)
-    border:SetPoint("TOPLEFT", minimap, "TOPLEFT",
-      -layout.borderOffset, layout.borderOffset)
-    border:SetPoint("BOTTOMRIGHT", minimap, "BOTTOMRIGHT",
-      layout.borderOffset, -layout.borderOffset)
-  end
+  local border = minimap:CreateTexture(nil, "OVERLAY")
+  border:SetTexture(art.minimapBorder)
+  border:SetPoint("TOPLEFT", minimap, "TOPLEFT",
+    -layout.borderOffset, layout.borderOffset)
+  border:SetPoint("BOTTOMRIGHT", minimap, "BOTTOMRIGHT",
+    layout.borderOffset, -layout.borderOffset)
 
   local shadow = minimap:CreateTexture(nil, "BORDER")
   shadow:SetTexture(art.minimapShadow)
@@ -208,20 +301,7 @@ local function DressModernWowMinimap()
       bandCentreX,
       bandCentreFromBottom - layout.topPanelBottomOverhang + layout.zoneY)
 
-    local lastZone
-    local function RefreshZone()
-      if type(GetMinimapZoneText) ~= "function" then return end
-      local ok, zone = pcall(GetMinimapZoneText)
-      if not ok or type(zone) ~= "string" or zone == lastZone then return end
-      lastZone = zone
-      pcall(zoneLabel.SetText, zoneLabel, zone)
-    end
-    RefreshZone()
-    U.RegisterEvent("PLAYER_ENTERING_WORLD", RefreshZone)
-    U.RegisterEvent("ZONE_CHANGED", RefreshZone)
-    U.RegisterEvent("ZONE_CHANGED_INDOORS", RefreshZone)
-    U.RegisterEvent("ZONE_CHANGED_NEW_AREA", RefreshZone)
-    U.RegisterUpdate("minimap.modernwow.zone", layout.zoneRefresh, RefreshZone)
+    KeepZoneLabelFresh(zoneLabel, "minimap.modernwow.zone", layout.zoneRefresh)
     modernWowMinimap.zoneLabel = zoneLabel
   end
 
@@ -464,7 +544,12 @@ function ring.Place(frame, angle)
   local width = 140
   local ok, liveWidth = pcall(minimap.GetWidth, minimap)
   if ok and type(liveWidth) == "number" and liveWidth > 0 then width = liveWidth end
+  local x, y = cos(angle), sin(angle)
   local radius = width / 2 + RING_OUTSET
+  if ModernFlat() then
+    local edge = math.max(math.abs(x), math.abs(y))
+    if edge > 0 then radius = radius / edge end
+  end
 
   -- SetPoint offsets are in the icon's own scale, and the Turtle buttons are
   -- UIParent children rather than Minimap children.
@@ -477,7 +562,7 @@ function ring.Place(frame, angle)
 
   pcall(frame.ClearAllPoints, frame)
   return pcall(frame.SetPoint, frame, "CENTER", minimap, "CENTER",
-    radius * cos(angle), radius * sin(angle))
+    radius * x, radius * y)
 end
 
 -- The cursor's angle around the minimap centre, in [0, 360).
@@ -1142,8 +1227,14 @@ local function CursorOffset(minimap)
 
   local offsetX = cursorX / scale - centerX
   local offsetY = cursorY / scale - centerY
-  local radius = width / 2
-  if (offsetX * offsetX + offsetY * offsetY) > (radius * radius) then return nil end
+  if ModernFlat() then
+    local heightOk, height = pcall(minimap.GetHeight, minimap)
+    if not heightOk or type(height) ~= "number" or height <= 0 then height = width end
+    if math.abs(offsetX) > width / 2 or math.abs(offsetY) > height / 2 then return nil end
+  else
+    local radius = width / 2
+    if (offsetX * offsetX + offsetY * offsetY) > (radius * radius) then return nil end
+  end
   return offsetX, offsetY
 end
 
@@ -1307,7 +1398,12 @@ end
 function MM:OnEnable()
   if self.button then return end
 
-  DressModernWowMinimap()
+  if ModernFlat() then
+    DressModernFlatMinimap()
+  else
+    RestoreRoundMinimapMask()
+    DressModernWowMinimap()
+  end
 
   -- A child of Minimap, so it moves, scales and hides with the map. Its frame
   -- level sits above the map's own so its clicks are not taken as pings.

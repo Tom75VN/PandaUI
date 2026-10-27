@@ -17,9 +17,10 @@
 -- `classic-wow` the client's own UI-StatusBar fill.
 --
 -- The current target's plate also carries its debuffs (U.CreateNameplateAuraRows
--- in modules/auras.lua) and its cast (U.TargetCastInfo in modules/castbar.lua).
--- Both come from the "target" unit token, the only unit this stock client can
--- name for a plate, so other plates show neither.
+-- in modules/auras.lua) and its cast (U.TargetCastInfo in modules/castbar.lua),
+-- read through the "target" token. With Nampower every plate names its unit
+-- (U.PlateGuid), so other plates show their debuffs and casts too (options
+-- allPlateAuras / allPlateCasts); a stock client keeps the target-only path.
 --
 -- The options follow ShaguPlates' nameplate settings where they fit this
 -- client, the same set UnrealUI adapted (C:\Games\Azeroth Launcher\
@@ -29,8 +30,8 @@
 -- outlines, raid icons, name abbreviation, class colours, guild line, combo
 -- points, totem icons and critter hiding. The settings pages are
 -- modules/nameplatesettings.lua. ShaguPlates is intent only: no code, config
--- schema or assets are copied. Not here: combat-state colours, debuffs and
--- casts on non-target plates, click handling and mouselook.
+-- schema or assets are copied. Not here: combat-state colours, click handling
+-- and mouselook.
 --
 -- Compatibility notes that shaped this file:
 --
@@ -86,6 +87,8 @@ local defaults = {
   showHealthText = true,
   showAuras      = true,   -- target debuffs above the target's plate
   attachTargetCast = true, -- target cast under the target's plate
+  allPlateAuras  = true,   -- Nampower: debuffs on every plate
+  allPlateCasts  = true,   -- Nampower: casts under every plate
   fadeOthers     = true,   -- dim plates that are not the current target
   otherAlpha     = 0.75,
   showName       = true,   -- the unit's name above the bar
@@ -336,8 +339,8 @@ end
 -- the plate: the native tint stays yellow and UnitReaction stays 4 (user
 -- report 2026-10-20). Engaged means in combat and attacking the player, the
 -- pet or a party member -- or attacking nothing (stunned, feared, fleeing).
--- pfUI-octo's threat colouring needs per-plate GUID tokens this stock client
--- does not have, so only a unit token pandaUI can name is checked.
+-- pfUI-octo's threat colouring uses per-plate GUID tokens; a stock client has
+-- none, so only a unit token pandaUI can name is checked.
 reaction.ENGAGED_BY = { "player", "pet", "party1", "party2", "party3", "party4" }
 
 function reaction.Engaged(unit)
@@ -1623,36 +1626,75 @@ local function BuildOverlay(frame, parts)
   return overlay
 end
 
-local function RefreshTargetAuras(overlay)
+-- The unit a plate's debuffs are read through: "target" for the target's
+-- plate, the plate's GUID for the others (Nampower only), else nil.
+local function PlateAuraUnit(overlay)
+  if overlay.isTarget then return cfg.showAuras and "target" or nil end
+  if cfg.allPlateAuras and overlay.guid then return overlay.guid end
+  return nil
+end
+
+local function RefreshPlateAuras(overlay)
   if type(U.RefreshNameplateAuraRows) ~= "function" then return end
 
-  local active = cfg.showAuras and overlay.isTarget
-  if not active then
+  local unit = PlateAuraUnit(overlay)
+  if not unit then
     if overlay.auraActive then
       overlay.auraActive = false
+      overlay.auraUnit = nil
       U.RefreshNameplateAuraRows(overlay.auraRows, false)
     end
     return
   end
 
+  -- Other plates poll slower; DEBUFF_ADDED/REMOVED_OTHER pulls them forward
+  -- (U.NameplateAuraChanged).
   local now = ApiNumber("GetTime") or 0
-  if not overlay.auraActive or now >= (overlay.nextAuraRefresh or 0) then
+  if not overlay.auraActive or overlay.auraUnit ~= unit or
+     now >= (overlay.nextAuraRefresh or 0) then
     overlay.auraActive = true
-    overlay.nextAuraRefresh = now + 0.2
-    U.RefreshNameplateAuraRows(overlay.auraRows, true)
+    overlay.auraUnit = unit
+    overlay.nextAuraRefresh = now + (overlay.isTarget and 0.2 or 0.5)
+    U.RefreshNameplateAuraRows(overlay.auraRows, true, unit)
   end
 end
 
-local function RefreshTargetCast(overlay)
-  if not cfg.attachTargetCast or not overlay.isTarget or
-     type(U.TargetCastInfo) ~= "function" then
-    overlay.cast:Hide()
-    return
+-- Called by modules/auras.lua on Nampower's debuff events for this GUID.
+function U.NameplateAuraChanged(guid)
+  local i
+  for i = 1, table.getn(plateOrder) do
+    local overlay = plateOrder[i]
+    if overlay and overlay.guid == guid then overlay.nextAuraRefresh = 0 end
   end
+end
 
-  local spell, elapsed, duration, texture = U.TargetCastInfo()
+-- The target's cast comes from its tracker; another plate's from the
+-- Nampower GUID cast store (U.GuidCastInfo).
+local function PlateCastInfo(overlay)
+  if overlay.isTarget then
+    if cfg.attachTargetCast and type(U.TargetCastInfo) == "function" then
+      return U.TargetCastInfo()
+    end
+    return nil
+  end
+  if cfg.allPlateCasts and overlay.guid and
+     type(U.GuidCastInfo) == "function" then
+    return U.GuidCastInfo(overlay.guid)
+  end
+  return nil
+end
+
+-- modules/castbar.lua keeps its tick at frame rate while this is true and a
+-- GUID cast is live.
+function U.NameplateGuidCastsWanted()
+  return cfg.enabled and cfg.allPlateCasts and U.hasNampower and true or false
+end
+
+local function RefreshPlateCast(overlay)
+  local spell, elapsed, duration, texture = PlateCastInfo(overlay)
   if not spell or not duration then
     overlay.cast:Hide()
+    overlay.castLive = nil
     return
   end
 
@@ -1701,12 +1743,22 @@ local function RefreshTargetCast(overlay)
     overlay.castTime:SetText(string.format("%.1f", duration - elapsed))
   end
   overlay.cast:Show()
+  overlay.castLive = true
 end
 
--- Called from modules/castbar.lua's tick, so the plate's cast moves at the
--- castbar's rate rather than the 0.1s plate refresh.
+-- Called from modules/castbar.lua's tick, so plate casts move at the
+-- castbar's rate rather than the 0.1s plate refresh. A cast on another plate
+-- starts on that refresh and is then followed here.
 function U.RefreshNameplateTargetCast()
-  if targetOverlay then RefreshTargetCast(targetOverlay) end
+  if targetOverlay then RefreshPlateCast(targetOverlay) end
+  if not cfg.allPlateCasts then return end
+  local i
+  for i = 1, table.getn(plateOrder) do
+    local overlay = plateOrder[i]
+    if overlay and overlay.castLive and overlay ~= targetOverlay then
+      RefreshPlateCast(overlay)
+    end
+  end
 end
 
 local function AdoptPlate(frame)
@@ -1883,13 +1935,19 @@ local function RefreshPlate(overlay)
     -- recycled plate cannot show the previous unit's. Its engagement goes
     -- with it (reaction.PlateEngaged).
     overlay.engaged = nil
-    if overlay.isTarget then
+    if overlay.isTarget or overlay.guid or overlay.auraActive or
+       overlay.castLive then
       overlay.isTarget = false
-      RefreshTargetAuras(overlay)
+      overlay.guid = nil
+      RefreshPlateAuras(overlay)
       overlay.cast:Hide()
+      overlay.castLive = nil
     end
     return
   end
+
+  -- Nampower names the plate's unit; recycled plates are re-read every pass.
+  overlay.guid = U.PlateGuid(plate)
 
   -- Re-resolve which fontstring is the level: plates are recycled onto new
   -- units, and a name that happens to be numeric is not worth guarding against
@@ -1917,6 +1975,11 @@ local function RefreshPlate(overlay)
   -- than the target's tracked health, and disagreed with the target frame.
   overlay.isTarget = hasTarget and plateAlpha >= 0.99 and
                      (not targetName or targetName == name) and true or false
+  -- With Nampower the GUID decides, so two same-name mobs never swap.
+  if overlay.guid and style.targetGuid ~= nil then
+    overlay.isTarget = (hasTarget and overlay.guid == style.targetGuid) and
+                       true or false
+  end
   if overlay.isTarget then
     targetPlateActive = true
     targetOverlay = overlay
@@ -2006,8 +2069,8 @@ local function RefreshPlate(overlay)
   style.RefreshStrata(overlay)
   style.RefreshRaidIcon(overlay)
 
-  RefreshTargetAuras(overlay)
-  RefreshTargetCast(overlay)
+  RefreshPlateAuras(overlay)
+  RefreshPlateCast(overlay)
   style.RefreshGuild(overlay, name)
   style.RefreshCombo(overlay)
 end
@@ -2016,6 +2079,7 @@ local function RefreshAll()
   statRefreshed = statRefreshed + 1
   targetPlateActive = false
   targetOverlay = nil
+  style.targetGuid = U.UnitGuid("target")
   reaction.Learn("target")
   reaction.Learn("mouseover")
   if type(U.PlayerCacheLearn) == "function" then

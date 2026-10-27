@@ -352,10 +352,10 @@ end
 -- the label (see money.PlaceRewardItem); GetPoint returns fresh wrappers here,
 -- so object identity must not be used.
 --
--- UnrealQuest is the sole owner whenever its runtime global exists. That keeps
--- this fallback from hiding its coin row, moving its reward item, or issuing a
--- second UpdateScrollChildRect call (which can flash scrolled contents at their
--- unscrolled position on this client).
+-- UnrealQuest is the sole owner whenever its runtime global exists. PandaQuest
+-- likewise owns the row only while its public capability reports that its
+-- replacement is actually drawing. That keeps this fallback available when
+-- PandaQuest's reward option is disabled or its row could not build.
 local money = {
   name = "PandaUIQuestLogRewardMoney",
   itemGap = 5,
@@ -534,8 +534,12 @@ end
 -- A late-loading UnrealQuest takes ownership cleanly: remove only state this
 -- fallback marked as its own, and never undo UnrealQuest's separate native
 -- replacement marker.
-function money.Release()
-  money.RestoreMovedItem()
+function money.Release(preserveExternalLayout)
+  if preserveExternalLayout then
+    money.movedItem = nil
+  else
+    money.RestoreMovedItem()
+  end
   if money.row and IsShown(money.row) then
     pcall(money.row.Hide, money.row)
   end
@@ -547,7 +551,7 @@ function money.Release()
   local native = G("QuestLogMoneyFrame")
   if native and native.puiModernWowMoneyReplaced then
     native.puiModernWowMoneyReplaced = nil
-    if not native.unrealQuestMoneyReplaced then
+    if not preserveExternalLayout and not native.unrealQuestMoneyReplaced then
       pcall(native.SetAlpha, native, 1)
       local amount = money.ReadAmount()
       if amount and amount > 0 then pcall(native.Show, native) end
@@ -555,10 +559,24 @@ function money.Release()
   end
 end
 
+function money.PandaQuestOwns()
+  local pandaQuest = G("PandaQuest")
+  local client = type(pandaQuest) == "table" and pandaQuest.Client or nil
+  local owns = type(client) == "table"
+               and client.IsQuestLogRewardMoneyReplacementActive or nil
+  if type(owns) ~= "function" then return false end
+  local ok, active = pcall(owns)
+  return ok and active and true or false
+end
+
 function money.Refresh()
   if not design.Active() then return false end
   if G("UnrealQuest") then
     money.Release()
+    return false
+  end
+  if money.PandaQuestOwns() then
+    money.Release(true)
     return false
   end
 

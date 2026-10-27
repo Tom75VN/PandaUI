@@ -219,6 +219,123 @@ function U.CreateSectionHeader(parent, options)
   return control
 end
 
+-- A non-interactive optional-component row, matching PandaMap's pack list:
+-- name and explanation on the left, an 18-unit green/red state icon and a
+-- short state label on the right, then a neutral separator. The Turtle client
+-- ships these ready-check icons, so the status remains self-contained even
+-- when the optional component is absent.
+U.OPTIONAL_STATUS_SECTION_HEIGHT = 106
+function U.CreateOptionalStatusSection(parent, options)
+  options = options or {}
+  local width = options.width or U.SETTINGS_PAGE_WIDTH
+  local y = options.y or -4
+  local iconSize = 18
+  local statusWidth = 108
+  local statusLeft = width - statusWidth - iconSize - 6
+  local control = { puiParts = {} }
+
+  local function Add(region)
+    if region then table.insert(control.puiParts, region) end
+    return region
+  end
+
+  local header = U.CreateSectionHeader(parent, {
+    text = options.header or "",
+    width = width,
+    y = y,
+  })
+  local i
+  for i = 1, table.getn(header.puiParts or {}) do
+    Add(header.puiParts[i])
+  end
+
+  local name = Add(U.CreateSettingsLabel(parent, {
+    size = M.fontSize.normal,
+    color = M.color.text,
+    inherits = "GameFontHighlight",
+    justify = "LEFT",
+    width = statusLeft - 8,
+    height = 14,
+  }))
+  if name then
+    name:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y - 30)
+    name:SetText(options.name or "")
+  end
+
+  local note = Add(U.CreateSettingsLabel(parent, {
+    size = M.fontSize.small,
+    color = M.color.textDim,
+    inherits = "GameFontNormalSmall",
+    justify = "LEFT",
+    width = statusLeft - 28,
+  }))
+  if note then
+    if name then
+      U.AnchorSettingsDescription(note, name, 20)
+    else
+      note:SetPoint("TOPLEFT", parent, "TOPLEFT", 20, y - 49)
+    end
+    note:SetText(options.note or "")
+  end
+
+  local icon = parent:CreateTexture(nil, "ARTWORK")
+  if icon then
+    icon:SetWidth(iconSize)
+    icon:SetHeight(iconSize)
+    icon:SetPoint("LEFT", parent, "TOPLEFT", statusLeft, y - 37)
+    Add(icon)
+  end
+
+  local status = Add(U.CreateSettingsLabel(parent, {
+    size = M.fontSize.small,
+    color = M.color.textDim,
+    inherits = "GameFontHighlightSmall",
+    justify = "LEFT",
+    width = statusWidth,
+    height = 14,
+  }))
+  if status then
+    status:SetPoint("LEFT", parent, "TOPLEFT",
+                    statusLeft + iconSize + 6, y - 37)
+  end
+
+  local separator = Add(U.CreateRule(parent, { color = M.color.border }))
+  if separator then
+    separator:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y - 92)
+    separator:SetWidth(width)
+  end
+
+  function control.Refresh()
+    local detected, detail = false, nil
+    if type(options.detected) == "function" then
+      detected, detail = options.detected()
+    else
+      detected = options.detected and true or false
+    end
+    if icon then
+      icon:SetTexture(detected and
+        "Interface\\FrameXML\\LFT\\images\\readycheck-ready" or
+        "Interface\\FrameXML\\LFT\\images\\readycheck-notready")
+    end
+    if status then
+      local text = detected and (options.detectedText or "") or
+                   (options.missingText or "")
+      if detected and detail and detail ~= "" then
+        text = text .. " v" .. tostring(detail)
+      end
+      status:SetText(text)
+      if detected then
+        status:SetTextColor(0.36, 0.84, 0.28)
+      else
+        status:SetTextColor(0.90, 0.25, 0.22)
+      end
+    end
+  end
+
+  control.Refresh()
+  return control, control.Refresh
+end
+
 -- ---------------------------------------------------------------------------
 -- Checkbox
 --

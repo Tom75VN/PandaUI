@@ -1,7 +1,7 @@
 -- pandaUI :: core/itemsortdata.lua
 --
 -- Thin reader for Database/item_sort.lua. The generated database stores one
--- packed integer per Vanilla item template; this file owns the packing format
+-- packed integer per Turtle WoW item template; this file owns the packing format
 -- so category and sort callers never duplicate it. Items absent from the
 -- snapshot deliberately return nil and keep using the live-client fallback in
 -- core/itemcategory.lua and core/itemsort.lua.

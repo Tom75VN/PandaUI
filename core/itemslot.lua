@@ -878,6 +878,218 @@ function U.CreateItemSlot(parent, name, bag, slot)
 end
 
 -- ---------------------------------------------------------------------------
+-- Quest-starter marker
+--
+-- ITEM_STARTS_QUEST is the client's localized tooltip line for an item that
+-- begins a quest. Scan each distinct item link once through the same private
+-- tooltip contract used by core/itemcategory.lua, but budget the scans across
+-- ticks: opening a full merged bag must not populate dozens of tooltips in one
+-- frame. The result is immutable item metadata, so the link is the cache key.
+-- ---------------------------------------------------------------------------
+local QUEST_STARTER_SCAN = {
+  name = "PandaUIQuestStarterScanner",
+  update = "itemslot.quest-starter-scan",
+  interval = 0,
+  maxLines = 30,
+  retryLimit = 3,
+  scanner = nil,
+  cache = {},
+  queued = {},
+  queue = {},
+  head = 1,
+  tail = 0,
+  running = false,
+}
+
+local function EnsureQuestStarterMark(button)
+  if button.puiQuestStarterMark then return button.puiQuestStarterMark end
+  local token = M.questStarter
+  if not token or not token.texture or
+     type(button.GetFrameLevel) ~= "function" then return nil end
+
+  local ok, layer = pcall(CreateFrame, "Frame", nil, button)
+  if not ok or not layer then return nil end
+  pcall(layer.EnableMouse, layer, false)
+
+  local levelOk, level = pcall(button.GetFrameLevel, button)
+  if levelOk and tonumber(level) then
+    -- Above the count, favourite and junk markers. It occupies the requested
+    -- bottom-right corner and never becomes an input surface.
+    pcall(layer.SetFrameLevel, layer, level + 25)
+  end
+
+  local iconOk, icon = pcall(layer.CreateTexture, layer, nil, "OVERLAY")
+  if not iconOk or not icon then return nil end
+  pcall(icon.SetAllPoints, icon, layer)
+  pcall(icon.SetTexture, icon, token.texture)
+  if token.texCoord then
+    pcall(icon.SetTexCoord, icon, token.texCoord[1], token.texCoord[2],
+          token.texCoord[3], token.texCoord[4])
+  end
+
+  pcall(layer.Hide, layer)
+  button.puiQuestStarterMark = layer
+  button.puiQuestStarterState = false
+  return layer
+end
+
+local function SizeQuestStarterMark(button, layer)
+  local token = M.questStarter
+  local size = token.sourceSlot
+  local ok, width = pcall(button.GetWidth, button)
+  width = ok and tonumber(width) or nil
+  if width and width > 0 then size = width end
+  local scale = size / token.sourceSlot
+
+  pcall(layer.SetWidth, layer, token.width * scale)
+  pcall(layer.SetHeight, layer, token.height * scale)
+  pcall(layer.ClearAllPoints, layer)
+  pcall(layer.SetPoint, layer, "BOTTOMRIGHT", button, "BOTTOMRIGHT",
+        -token.inset * scale, token.inset * scale)
+end
+
+function U.SetItemSlotQuestStarter(button, startsQuest)
+  if not button then return end
+  if not startsQuest then
+    if button.puiQuestStarterMark and button.puiQuestStarterState ~= false then
+      button.puiQuestStarterState = false
+      pcall(button.puiQuestStarterMark.Hide, button.puiQuestStarterMark)
+    end
+    return
+  end
+
+  local layer = EnsureQuestStarterMark(button)
+  if not layer then return end
+  SizeQuestStarterMark(button, layer)
+  if button.puiQuestStarterState == true then return end
+
+  button.puiQuestStarterState = true
+  pcall(layer.SetAlpha, layer, 1)
+  pcall(layer.Show, layer)
+end
+
+local function ReadQuestStarterLine(tip, bag, slot)
+  if not pcall(tip.SetBagItem, tip, bag, slot) then return nil end
+
+  local countOk, count = pcall(tip.NumLines, tip)
+  count = countOk and tonumber(count) or 0
+  if count < 2 then return nil end
+  if count > QUEST_STARTER_SCAN.maxLines then
+    count = QUEST_STARTER_SCAN.maxLines
+  end
+
+  local starts = U.G("ITEM_STARTS_QUEST")
+  if type(starts) ~= "string" or starts == "" then return false end
+
+  local line
+  for line = 2, count do
+    local text = U.TooltipRegionText(
+      U.G(QUEST_STARTER_SCAN.name .. "TextLeft" .. line))
+    if text and string.find(text, starts, 1, true) then return true end
+  end
+  return false
+end
+
+local function StopQuestStarterScan()
+  if not QUEST_STARTER_SCAN.running then return end
+  QUEST_STARTER_SCAN.running = false
+  U.UnregisterUpdate(QUEST_STARTER_SCAN.update)
+end
+
+local function ProcessQuestStarterScan()
+  if QUEST_STARTER_SCAN.head > QUEST_STARTER_SCAN.tail then
+    QUEST_STARTER_SCAN.head, QUEST_STARTER_SCAN.tail = 1, 0
+    StopQuestStarterScan()
+    return
+  end
+
+  local entry = QUEST_STARTER_SCAN.queue[QUEST_STARTER_SCAN.head]
+  QUEST_STARTER_SCAN.queue[QUEST_STARTER_SCAN.head] = nil
+  QUEST_STARTER_SCAN.head = QUEST_STARTER_SCAN.head + 1
+  if not entry then return end
+  QUEST_STARTER_SCAN.queued[entry.link] = nil
+
+  local source
+  local button
+  for button in pairs(entry.buttons) do
+    if button.puiQuestStarterLink == entry.link then
+      local current = U.ContainerSlotLink(button.puiQuestStarterBag,
+                                          button.puiQuestStarterSlot)
+      if current == entry.link then source = button break end
+    end
+  end
+
+  local result
+  if source then
+    if not QUEST_STARTER_SCAN.scanner then
+      QUEST_STARTER_SCAN.scanner =
+        U.CreateScannerTooltip(QUEST_STARTER_SCAN.name, UIParent)
+    end
+    result = U.ScanWithTooltip(QUEST_STARTER_SCAN.scanner,
+                               ReadQuestStarterLine,
+                               source.puiQuestStarterBag,
+                               source.puiQuestStarterSlot)
+  end
+
+  if result ~= nil then
+    QUEST_STARTER_SCAN.cache[entry.link] = result and true or false
+  elseif source and (entry.attempts or 0) + 1 < QUEST_STARTER_SCAN.retryLimit then
+    entry.attempts = (entry.attempts or 0) + 1
+    QUEST_STARTER_SCAN.tail = QUEST_STARTER_SCAN.tail + 1
+    QUEST_STARTER_SCAN.queue[QUEST_STARTER_SCAN.tail] = entry
+    QUEST_STARTER_SCAN.queued[entry.link] = entry
+  end
+
+  for button in pairs(entry.buttons) do
+    if button.puiQuestStarterLink == entry.link then
+      U.SetItemSlotQuestStarter(button, result == true)
+    end
+  end
+
+  if QUEST_STARTER_SCAN.head > QUEST_STARTER_SCAN.tail then
+    QUEST_STARTER_SCAN.head, QUEST_STARTER_SCAN.tail = 1, 0
+    StopQuestStarterScan()
+  end
+end
+
+local function QueueQuestStarterScan(button, bag, slot, link)
+  button.puiQuestStarterBag = bag
+  button.puiQuestStarterSlot = slot
+  button.puiQuestStarterLink = link
+
+  if type(link) ~= "string" or link == "" then
+    U.SetItemSlotQuestStarter(button, false)
+    return
+  end
+
+  local cached = QUEST_STARTER_SCAN.cache[link]
+  if cached ~= nil then
+    U.SetItemSlotQuestStarter(button, cached)
+    return
+  end
+
+  U.SetItemSlotQuestStarter(button, false)
+  local entry = QUEST_STARTER_SCAN.queued[link]
+  if entry then
+    entry.buttons[button] = true
+    return
+  end
+
+  entry = { link = link, buttons = {} }
+  entry.buttons[button] = true
+  QUEST_STARTER_SCAN.tail = QUEST_STARTER_SCAN.tail + 1
+  QUEST_STARTER_SCAN.queue[QUEST_STARTER_SCAN.tail] = entry
+  QUEST_STARTER_SCAN.queued[link] = entry
+
+  if not QUEST_STARTER_SCAN.running then
+    QUEST_STARTER_SCAN.running = true
+    U.RegisterUpdate(QUEST_STARTER_SCAN.update,
+                     QUEST_STARTER_SCAN.interval,
+                     ProcessQuestStarterScan)
+  end
+end
+
+-- ---------------------------------------------------------------------------
 -- Favourite marker
 --
 -- The star modules/bagfavorites.lua puts on a marked bag item. It lives here
@@ -1035,7 +1247,7 @@ function U.UpdateItemSlotCooldown(bag, button)
   if type(fn) == "function" then pcall(fn, bag, button) end
 end
 
-function U.UpdateItemSlot(button, bag, slot)
+function U.UpdateItemSlot(button, bag, slot, link)
   if not button then return end
 
   -- Through the shared reader rather than GetContainerItemInfo directly: an
@@ -1103,6 +1315,9 @@ function U.UpdateItemSlot(button, bag, slot)
       pcall(button.puiEdges[i].Show, button.puiEdges[i])
     end
   end
+
+  if texture and not link then link = U.ContainerSlotLink(bag, slot) end
+  QueueQuestStarterScan(button, bag, slot, link)
 
   U.UpdateItemSlotCooldown(bag, button)
 end

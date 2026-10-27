@@ -5076,6 +5076,9 @@ end
 -- client pages are reparented into an already-scaled window. The screen guard
 -- treats this as the owner's base scale and only shrinks it to fit.
 gs.SCREEN_SCALE = 0.9
+-- How often the open window checks UIParent's scale (gs.WatchScreenScale).
+gs.SCALE_WATCH_INTERVAL = 0.2
+gs.SCALE_WATCH_ID = "gamesettings.screenscale"
 
 function gs.ApplyScreenScale()
   pcall(gs.panel.SetScale, gs.panel, 1)
@@ -5083,6 +5086,25 @@ function gs.ApplyScreenScale()
   local scale = 1
   if parent and parent > 0 then scale = gs.SCREEN_SCALE / parent end
   pcall(gs.panel.SetScale, gs.panel, scale)
+  gs.parentScale = gs.Number(UIParent, "GetEffectiveScale")
+end
+
+-- The UI Scale slider and Use UI Scale box live on this window's own Video
+-- page, so the scale changes while it is open (user report 2026-10-26: its
+-- height still followed the slider until the next Open). UI_SCALE_CHANGED is
+-- not on this client, so the open window polls UIParent's effective scale and
+-- re-applies its own when that moves. Hosted client controls follow the
+-- window's scale (probe uiscale.v1), so nothing is re-attached.
+function gs.WatchScreenScale()
+  if not gs.panel or not gs.panel:IsShown() then
+    U.UnregisterUpdate(gs.SCALE_WATCH_ID)
+    return
+  end
+  local parent = gs.Number(UIParent, "GetEffectiveScale")
+  if not parent or not gs.parentScale or
+     math.abs(parent - gs.parentScale) > 0.001 then
+    gs.ApplyScreenScale()
+  end
 end
 
 -- id selects the page to open on; omitted keeps the last one, or Video.
@@ -5090,6 +5112,8 @@ function gs.Open(id)
   if not gs.panel then gs.Build() end
 
   gs.ApplyScreenScale()
+  U.RegisterUpdate(gs.SCALE_WATCH_ID, gs.SCALE_WATCH_INTERVAL,
+                   gs.WatchScreenScale)
   gs.panel:Show()
   if gs.list and type(gs.list.ShowSearch) == "function" then
     gs.list.ShowSearch()
@@ -5116,6 +5140,7 @@ function gs.Close()
   gs.closing = true
   pcall(gs.Detach)
   pcall(gs.panel.Hide, gs.panel)
+  U.UnregisterUpdate(gs.SCALE_WATCH_ID)
   gs.closing = false
 end
 

@@ -9,6 +9,62 @@
 local U = PandaUI
 local M = U.media
 
+-- Optional extension detection is centralised here so modules do not infer a
+-- DLL from one event happening to fire. GetNampowerVersion is Nampower's
+-- documented feature check; calling it also gives Settings a useful version
+-- without making that call part of any cast path. Every consumer still keeps
+-- a stock client path.
+local nampowerVersion = U.G("GetNampowerVersion")
+U.hasNampower = type(nampowerVersion) == "function"
+U.nampowerVersion = nil
+if U.hasNampower then
+  local ok, major, minor, patch = pcall(nampowerVersion)
+  if ok and major ~= nil then
+    U.nampowerVersion = tostring(major)
+    if minor ~= nil then
+      U.nampowerVersion = U.nampowerVersion .. "." .. tostring(minor)
+    end
+    if patch ~= nil then
+      U.nampowerVersion = U.nampowerVersion .. "." .. tostring(patch)
+    end
+  end
+end
+
+function U.NampowerDetected()
+  return U.hasNampower and true or false, U.nampowerVersion
+end
+
+-- Nampower GUIDs (knowledge.json / nameplates.nampower_plate_guid_debuffs,
+-- probe plateaura.v1): a native plate's GetName(1) names its unit, and that
+-- "0x..." string is a unit token for every unit API. nil without Nampower.
+local NULL_GUID = "0x0000000000000000"
+
+local function ValidGuid(guid)
+  if type(guid) ~= "string" or guid == NULL_GUID then return nil end
+  if string.sub(guid, 1, 2) ~= "0x" then return nil end
+  return guid
+end
+
+function U.PlateGuid(plate)
+  if not U.hasNampower or not plate or type(plate.GetName) ~= "function" then
+    return nil
+  end
+  local ok, guid = pcall(plate.GetName, plate, 1)
+  if not ok then return nil end
+  return ValidGuid(guid)
+end
+
+local getUnitGuid = U.hasNampower and U.G("GetUnitGUID") or nil
+if type(getUnitGuid) ~= "function" then getUnitGuid = nil end
+
+function U.UnitGuid(unit)
+  if not getUnitGuid or type(unit) ~= "string" then return nil end
+  if string.sub(unit, 1, 2) == "0x" then return ValidGuid(unit) end
+  local ok, guid = pcall(getUnitGuid, unit)
+  if not ok then return nil end
+  return ValidGuid(guid)
+end
+
 -- ---------------------------------------------------------------------------
 -- Numeric helpers
 -- ---------------------------------------------------------------------------

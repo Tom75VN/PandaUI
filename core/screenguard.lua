@@ -28,7 +28,8 @@
 --   * The bag, bank and craft tracker windows register with their own position
 --     ids.
 --   * core/mover.lua clamps the HUD elements it places through
---     U.ClampPositionToScreen, once on apply and on drop. HUD movers are not
+--     U.ClampPositionToScreen, on apply, on drop, and again when the UI scale
+--     or screen size changes (mover.lua's screen watch). HUD movers are not
 --     swept and never scaled: several are native frames (MinimapCluster) and
 --     theme code owns their scale.
 --

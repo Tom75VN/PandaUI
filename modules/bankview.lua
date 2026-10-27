@@ -273,6 +273,36 @@ function view.BottomPad()
   return U.ModernWowBagMetric("bottomPad", PADDING)
 end
 
+view.MIN_COLUMNS = 7
+view.MAX_COLUMNS = 64
+
+function view.MaxColumns()
+  if not view.frame then return view.MAX_COLUMNS end
+  local gap = view.SlotGap()
+  local pitch = SLOT_SIZE + gap
+  local width = U.UIWidth() / U.FrameUIRatio(view.frame)
+  local columns = math.floor((width - view.SidePad() * 2 + gap) / pitch)
+  return math.max(view.MIN_COLUMNS, math.min(view.MAX_COLUMNS, columns))
+end
+
+function view.Geometry()
+  local columns, height, resized = U.GetBagFamilyWindowGeometry("bank")
+  columns = math.floor(columns + 0.5)
+  columns = math.max(view.MIN_COLUMNS, math.min(view.MaxColumns(), columns))
+  return columns, height, resized
+end
+
+function view.Width(columns)
+  local gap = view.SlotGap()
+  return columns * (SLOT_SIZE + gap) - gap + view.SidePad() * 2
+end
+
+function view.Height(natural)
+  local _, requested, resized = U.GetBagFamilyWindowGeometry("bank")
+  if resized and requested > natural then return requested end
+  return natural
+end
+
 function view.BorderColor(item)
   if not item then return M.slotBorder.empty end
   if item.k then return M.slotBorder.quest end
@@ -404,6 +434,8 @@ function view.Layout()
   local gap = view.SlotGap()
   local i
 
+  local columns = view.Geometry()
+
   for i = 1, table.getn(db.bags) do
     local bag = db.bags[i]
     local slot
@@ -416,7 +448,7 @@ function view.Layout()
       view.FillSlot(button, bag.items[slot])
       button:Show()
 
-      if x >= COLUMNS - 1 then
+      if x >= columns - 1 then
         x, y = 0, y + 1
       else
         x = x + 1
@@ -434,15 +466,38 @@ function view.Layout()
   -- Never visited a banker on this character: the window still opens, with
   -- the reason it is empty written where the slots would be.
   if view.grid.empty then
+    view.grid.empty:SetWidth(columns * (SLOT_SIZE + gap) - gap - 16)
     if n == 0 then view.grid.empty:Show() else view.grid.empty:Hide() end
   end
   if n == 0 then y = EMPTY_ROWS end
 
   local frame = view.frame
-  frame:SetWidth(COLUMNS * (SLOT_SIZE + gap) - gap + view.SidePad() * 2)
-  frame:SetHeight(view.Header() + y * (SLOT_SIZE + gap) - gap +
-                  view.BottomPad())
+  frame:SetWidth(view.Width(columns))
+  local natural = view.Header() + y * (SLOT_SIZE + gap) - gap +
+                  view.BottomPad()
+  frame:SetHeight(view.Height(natural))
   if view.Modern() then U.ModernWowBagHousing(frame) end
+end
+
+function U.RefreshSavedBankWindowGeometry()
+  if view.frame then view.Layout() end
+end
+
+function view.Resize(width, height)
+  local gap = view.SlotGap()
+  local pitch = SLOT_SIZE + gap
+  local columns = math.floor((width - view.SidePad() * 2 + gap) /
+                             pitch + 0.5)
+  columns = math.max(view.MIN_COLUMNS, math.min(view.MaxColumns(), columns))
+  local minimum = view.Header() + view.BottomPad() + SLOT_SIZE
+  local maximum = U.UIHeight() / U.FrameUIRatio(view.frame)
+  height = math.floor((tonumber(height) or minimum) + 0.5)
+  height = math.max(minimum, math.min(maximum, height))
+  U.SetBagFamilyWindowGeometry("bank", columns, height)
+  U.RefreshSavedBankWindowGeometry()
+  if type(U.RefreshLiveBankWindowGeometry) == "function" then
+    U.RefreshLiveBankWindowGeometry()
+  end
 end
 
 -- Opens where the player last dragged it. Until it has been dragged once, it
@@ -465,6 +520,11 @@ function view.Place()
     frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
   end
   return true
+end
+
+function U.ApplySavedBankWindowScale(oldPercent, newPercent)
+  return U.ApplyBagFamilyWindowScale(view.frame, VIEW_POSITION_ID, oldPercent,
+                                     newPercent, view.Place)
 end
 
 -- ---------------------------------------------------------------------------
@@ -519,6 +579,18 @@ function view.BuildDragHandle()
   frame.dragHandle = handle
 end
 
+function view.BuildResize()
+  view.frame.resizeGrip = U.BuildBagResizeGrip({
+    window = view.frame,
+    target = view.frame,
+    name = "PandaUIBankViewResizeGrip",
+    id = VIEW_POSITION_ID,
+    updateId = "bankview.resize",
+    onResize = view.Resize,
+    onStop = U.RefreshSavedBankWindowGeometry,
+  })
+end
+
 -- The bag-family header for a window with no controls: the
 -- title takes the icon row's place and the read-only note sits right-aligned
 -- against the close button. Both are pinned to fixed points rather than to
@@ -552,6 +624,7 @@ end
 
 function view.Build()
   local frame = U.CreatePanel(UIParent, { name = "PandaUIBankViewFrame" })
+  pcall(frame.SetScale, frame, U.GetBankWindowScale() / 100)
   -- Below every interface window, like the live bank (user request,
   -- 2026-09-21). Previously HIGH so the item tooltip could draw over it; LOW
   -- keeps that and additionally puts every window on top. A world object's
@@ -680,6 +753,7 @@ function BV:OnEnable()
 
   view.EnsureStore()
   view.Build()
+  view.BuildResize()
 
   U.RegisterEvent("BANKFRAME_OPENED", function()
     view.live = true

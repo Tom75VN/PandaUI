@@ -748,16 +748,17 @@ local function ReadVitals(cell)
   end
 
   local unit = cell.unit
-  v.health = tonumber(Call("UnitHealth", unit)) or 0
-  v.maximum = tonumber(Call("UnitHealthMax", unit)) or 0
+  v.health = tonumber((Call("UnitHealth", unit))) or 0
+  v.maximum = tonumber((Call("UnitHealthMax", unit))) or 0
   v.connected = Call("UnitIsConnected", unit) and true or false
   v.dead = v.connected and Call("UnitIsDeadOrGhost", unit) and true or false
   local _, class = Call("UnitClass", unit)
   v.class = class
   v.name = Call("UnitName", unit)
-  v.power = tonumber(Call("UnitMana", unit)) or 0
-  v.powerMax = tonumber(Call("UnitManaMax", unit)) or 0
-  v.powerType = tonumber(Call("UnitPowerType", unit)) or 0
+  v.power = tonumber((Call("UnitMana", unit))) or 0
+  v.powerMax = tonumber((Call("UnitManaMax", unit))) or 0
+  -- OctoWoW UnitPowerType also returns a token string; keep only the number.
+  v.powerType = tonumber((Call("UnitPowerType", unit))) or 0
   -- CompactUnitFrame_GetRangeAlpha's 0.5, on the world-object check.
   v.far = v.connected and U.UnitObjectVisible(unit) == false
   return v

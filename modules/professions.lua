@@ -357,6 +357,14 @@ end
 -- A cropped image reconstructed from exact 512-safe source tiles. The frame
 -- exposes only the small setters used below; each Texture keeps the authored
 -- pixels and the same source-space position as the former large surface.
+--
+-- The tiles are regions of `parent`, not of the anchor frame: a child frame
+-- draws above every layer of its parent, so the art hid the form's own
+-- FontStrings (recipe name, Requires, Reagents, Track label). The drawn size
+-- comes from puiSetSize in the caller's own units, never from GetWidth on the
+-- anchor frame, which read stale after the window's scale changed (UI scale
+-- or screen fit) and left the art and list background at ~80% of their panel
+-- (user screenshot 2026-10-27).
 function pw.TiledCrop(parent, layer, spec)
   if not parent or not spec then return nil end
   local frame = pw.Frame("Frame", parent, nil, false)
@@ -370,7 +378,7 @@ function pw.TiledCrop(parent, layer, spec)
   local row, column
   for row = 0, rows - 1 do
     for column = 0, columns - 1 do
-      local texture = pw.Texture(frame, layer)
+      local texture = pw.Texture(parent, layer)
       if texture then
         local index = row * columns + column + 1
         if spec.paths then pcall(texture.SetTexture, texture, spec.paths[index]) end
@@ -385,8 +393,9 @@ function pw.TiledCrop(parent, layer, spec)
   local function Layout()
     local crop = frame.puiCrop
     local cropWidth, cropHeight = crop[3] - crop[1], crop[4] - crop[2]
-    local width = pw.Number(frame, "GetWidth")
-    local height = pw.Number(frame, "GetHeight")
+    local size = frame.puiSize
+    local width = size and size[1] or pw.Number(frame, "GetWidth")
+    local height = size and size[2] or pw.Number(frame, "GetHeight")
     if width <= 0 or height <= 0 or cropWidth <= 0 or cropHeight <= 0 then return end
     local i
     for i = 1, table.getn(frame.puiTiles) do
@@ -414,6 +423,10 @@ function pw.TiledCrop(parent, layer, spec)
     end
   end
   frame.puiLayoutTiles = Layout
+  frame.puiSetSize = function(width, height)
+    frame.puiSize = { width, height }
+    Layout()
+  end
   frame.puiSetSourceRect = function(left, top, right, bottom)
     frame.puiCrop = { left, top, right, bottom }
     Layout()
@@ -1303,6 +1316,7 @@ function pw.PlaceArt(win)
   else
     bottom = top + sourceWidth * height / width
   end
+  if art.puiSetSize then pcall(art.puiSetSize, width, height) end
   if art.puiSetSourceRect then
     pcall(art.puiSetSourceRect, left, top, right, bottom)
   end
@@ -1520,8 +1534,9 @@ function pw.BuildFilters(win)
   win.filters = pw.Frame("Frame", win.cover, t.levels.panel, true)
   if not win.filters then return end
   pw.Place(win.filters, win.frame, "TOPLEFT", f.x, -f.y, f.width, f.height)
-  local bed = pw.Atlas(win.filters, "BACKGROUND", f.cell)
-  pw.PanelFill(bed, win.filters)
+  -- No atlas bed: the former cell (1,79,269,113) cut across the recipe
+  -- rows' selected and highlight bars, whose gold and white lines showed
+  -- between the dropdown and the reagent box (user screenshot, 2026-10-27).
   if type(U.ModernWowThinBorder) == "function" then
     pcall(U.ModernWowThinBorder, win.filters)
   end
@@ -2625,6 +2640,11 @@ function pw.Build(kind)
   local listBackground = pw.TiledCrop(win.list, "BACKGROUND",
                                       t.cells.listBackground)
   pw.PanelFill(listBackground, win.list)
+  if listBackground and type(U.ModernWowThinBorderInsets) == "function" then
+    local left, top, right, bottom = U.ModernWowThinBorderInsets()
+    pcall(listBackground.puiSetSize, l.width - left - right,
+          d.height - l.y - l.bottom - top - bottom)
+  end
   if type(U.ModernWowThinBorder) == "function" then pcall(U.ModernWowThinBorder, win.list) end
   -- Built before the rows so it stays underneath them.
   win.wheel = U.CreateWheelCatcher(win.list, function(direction)

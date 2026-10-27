@@ -4,6 +4,47 @@ Player-visible PandaUI changes, newest first. Keep every bullet short, clear and
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-10-27
+
+### Added
+
+- Turtle WoW custom items now show their bundled vendor sell prices.
+- Advanced Character Stats now matches BetterCharacterStats item, talent, aura, set and oil calculations.
+- Full Character Stats are now available in Classic, Modern and Modern WoW themes.
+- Items that begin quests now show a small yellow exclamation mark.
+- Bag and bank windows now have separate scale settings.
+- Bag and bank windows resize by dragging their bottom-right corner; the grip shows on hover.
+- With Nampower, every nameplate shows debuffs and casts, your debuffs get exact timers, and settings describe both features.
+
+### Removed
+
+- The Modern minimap no longer shows its plus and minus zoom icons.
+
+### Changed
+
+- The Modern theme now uses a flat square minimap; Classic WoW and Modern WoW keep the round one.
+- The custom Turtle WoW items are now properly categorized.
+- Bags settings descriptions are much shorter.
+- Class-icon portraits now also apply to the target-of-target frame.
+- pandaUI settings pages show the pandaUI logo; client settings pages keep the settings panda.
+
+### Fixed
+
+- The Modern theme Quest Log now shows its window background.
+- Target cast bars now recognize more NPC spells and recover casts started before targeting.
+- Target cast bars automatically use Nampower when detected; its status shows in Unit Frames and Nameplates settings.
+- The bag-bar setting now aligns with the Bags page's left edge.
+- PandaQuest and PandaMap pages in Game Settings now use the game's settings text size.
+- The Modern WoW Quest Log parchment no longer shows tile seams.
+- Quest Log money no longer draws twice when PandaQuest is enabled.
+- Ticking Raid-style frames for the party no longer causes a Lua error.
+- The Modern WoW crafting window now fits its art, recipe list, labels and controls correctly, without stray lines.
+- HUD elements move back inside the screen when you raise the UI scale.
+- The settings window keeps its size when you change the UI scale while it is open.
+- On the Classic WoW theme, the unit frame Scale (%) slider now scales the whole frame.
+- On the Classic WoW theme, action bar icons now match their slot size.
+- On the Modern theme, the action bar "Slot border" option is now correctly named "Slot background".
+
 ## [0.12.1] - 2026-10-26
 
 ### Added

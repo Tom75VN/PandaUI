@@ -275,17 +275,37 @@ local function ShowUnitFrameCheck()
       if not tracker then return end
       U.Print(label .. " castbar: casting " .. tostring(tracker.casting) ..
               ", starts " .. tostring(tracker.starts) ..
-              ", unknown " .. tostring(tracker.unknown) ..
+              ", unknown estimates " .. tostring(tracker.unknown) ..
+              ", replayed " .. tostring(tracker.replayed) ..
               ", patterns " .. tostring(tracker.patterns))
       if tracker.casting then
         U.Print("  " .. tostring(tracker.caster) .. ": " ..
-                tostring(tracker.spell) .. ", " ..
-                tostring(tracker.remaining) .. "s remaining")
+                  tostring(tracker.spell) .. ", " ..
+                  tostring(tracker.remaining) .. "s remaining, " ..
+                  tostring(tracker.kind) .. ", id " ..
+                  tostring(tracker.spellId) .. ", guid " ..
+                  tostring(tracker.guid))
       elseif tracker.lastUnknown then
         U.Print("  last unknown spell: " .. tostring(tracker.lastUnknown))
       end
       U.Print("  event " .. tostring(tracker.lastEvent) ..
+              ", source " .. tostring(tracker.lastSource) ..
+              ", estimated " .. tostring(tracker.estimated) ..
+              ", pushbacks " .. tostring(tracker.pushbacks) ..
               ", icon " .. tostring(tracker.iconSource))
+    end
+
+    if cb and cb.nampower then
+      local np = cb.nampower
+      U.Print("target cast DLL: available " .. tostring(np.available) ..
+              ", version " .. tostring(np.version) ..
+              ", backend " .. tostring(np.backend) ..
+              ", CVars " .. tostring(np.cvarsEnabled) ..
+              ", starts " .. tostring(np.starts) ..
+              ", stops " .. tostring(np.stops) ..
+              ", failures " .. tostring(np.failures) ..
+              ", interrupts " .. tostring(np.interrupts) ..
+              ", pushbacks " .. tostring(np.pushbacks))
     end
 
     if cb and cb.native then
