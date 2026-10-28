@@ -4,10 +4,6 @@ Player-visible PandaUI changes, newest first. Keep every bullet short, clear and
 
 ## [Unreleased]
 
-### Fixed
-
-- Modern WoW party-frame player names always stay on one line.
-
 ## [0.13.0] - 2026-10-28
 
 ### Added
@@ -27,6 +23,7 @@ Player-visible PandaUI changes, newest first. Keep every bullet short, clear and
 - Party frames now hide automatically while the player is in a raid.
 - Talking to class, profession or talent trainers no longer crashes the game.
 - Arrow-key nudges, Scale changes and snapping no longer jump an Edit Mode element back to an old position.
+- Modern WoW party-frame player names always stay on one line.
 
 ## [0.12.2] - 2026-10-27
 
