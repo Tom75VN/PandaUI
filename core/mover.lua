@@ -500,14 +500,32 @@ local function ReadPlacement(frame)
            relativePoint = relativePoint, x = x, y = y }
 end
 
+-- Where an anchor is, as the player sees it. The stored tuple can differ from
+-- the drawn frame after load (knowledge.json /
+-- mover.first_arrow_nudge_replays_stale_saved_position), so arrow nudges, scale
+-- changes and snapping start from the live UIParent placement and use the
+-- stored or default tuple only when the frame cannot be read that way.
 local function EntryPosition(entry)
-  local position = U.GetPosition(entry.id) or entry.default
-  if position then return position end
-
   local placement = ReadPlacement(entry.frame)
-  if not placement or (placement.relative and
-                       placement.relative ~= UIParent) then return nil end
-  return placement
+  if placement and (not placement.relative or
+                    placement.relative == UIParent) then
+    return placement
+  end
+  return U.GetPosition(entry.id) or entry.default
+end
+
+-- The other anchors do not move while one is dragged, so a drag reads each of
+-- their placements once instead of allocating them again on every tick.
+local dragPlacements
+
+local function OtherPosition(other)
+  if not dragPlacements then return EntryPosition(other) end
+  local position = dragPlacements[other]
+  if position == nil then
+    position = EntryPosition(other) or false
+    dragPlacements[other] = position
+  end
+  return position or nil
 end
 
 -- ---------------------------------------------------------------------------
@@ -1101,7 +1119,7 @@ local function SnapToMovers(entry, point, relativePoint, x, y, gridOn,
     local other = movers[moverOrder[i]]
     if other ~= entry and IsEntryVisible(other) and
        not IsFollower(entry, other) then
-      local position = EntryPosition(other)
+      local position = OtherPosition(other)
       local otherLeft, otherRight, otherBottom, otherTop =
         MoverBounds(other, position)
       if otherLeft then
@@ -1193,7 +1211,7 @@ local function SnapToMovers(entry, point, relativePoint, x, y, gridOn,
       if other ~= entry and IsEntryVisible(other) and
          not IsFollower(entry, other) then
         local otherLeft, otherRight, otherBottom, otherTop =
-          MoverBounds(other, EntryPosition(other))
+          MoverBounds(other, OtherPosition(other))
         if otherLeft and Overlaps(left, right, bottom, top,
                                   otherLeft, otherRight,
                                   otherBottom, otherTop) then
@@ -1789,6 +1807,7 @@ local function StartDrag(entry)
   end
 
   entry.dragging = true
+  dragPlacements = {}
   -- PinToUIParent above has already reduced the visible anchor to one stable
   -- point. Keep that point independent of the native input Button's movement.
   entry.dragStartPosition = ReadDragPosition(frame)
@@ -1856,10 +1875,13 @@ StopDrag = function(entry)
   entry.dragCursorX, entry.dragCursorY = nil, nil
   HideAlignmentGuides()
   if not PositionChanged(before, ReadDragPosition(entry.frame)) then
+    dragPlacements = nil
     ClearFollowers(entry)
     return true
   end
+  -- The drop still snaps against the placements this drag read.
   local captured = CapturePosition(entry)
+  dragPlacements = nil
   entry.snapFromX, entry.snapFromY = nil, nil
   FinishFollowers(entry, before)
   ClearFollowers(entry)
@@ -2630,7 +2652,7 @@ UpdateAlignmentGuides = function(entry, point, relativePoint, x, y)
       if other ~= entry and IsEntryVisible(other) and
          not IsFollower(entry, other) then
         local otherLeft, otherRight, otherBottom, otherTop =
-          MoverBounds(other, EntryPosition(other))
+          MoverBounds(other, OtherPosition(other))
         if otherLeft then
           if not guideX then
             guideX = AlignedLine(left, right, otherLeft, otherRight,
@@ -3388,13 +3410,11 @@ local function NudgeActiveMover(x, y)
   PinToUIParent(entry)
   PinPassengers(entry)
 
-  local position = U.GetPosition(entry.id) or entry.default
+  -- From the anchor the player can see, not the stored tuple (EntryPosition).
+  local position = EntryPosition(entry)
   if not position then
-    position = ReadPlacement(entry.frame)
-    if not position or position.relative ~= UIParent then
-      U.Print(U.L("MOVER_DRAG_FIRST", entry.label))
-      return false
-    end
+    U.Print(U.L("MOVER_DRAG_FIRST", entry.label))
+    return false
   end
 
   entry.followers = MoverConfig().groupTouching and CollectFollowers(entry) or {}

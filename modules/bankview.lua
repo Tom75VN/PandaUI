@@ -106,6 +106,7 @@ function view.EnsureStore()
           bag.items[slot] = nil
         end
       end
+      if type(bag.label) ~= "string" or bag.label == "" then bag.label = nil end
       table.insert(clean, bag)
     end
   end
@@ -203,6 +204,15 @@ function view.Snapshot()
     local size = U.ContainerSlotCount(bag)
     if size > 0 then
       local entry = { id = bag, size = size, items = {} }
+      -- The specialty subtype the live bank's category view reads, saved so
+      -- the category view here keeps the same specialty sections away from
+      -- the banker.
+      if type(U.BagSpecialtyLabel) == "function" then
+        local ok, label = pcall(U.BagSpecialtyLabel, bag)
+        if ok and type(label) == "string" and label ~= "" then
+          entry.label = label
+        end
+      end
       local slot
       for slot = 1, size do
         local item = view.ReadSlot(bag, slot)
@@ -346,9 +356,12 @@ end
 
 function view.EnsureSlot(n)
   if view.slots[n] then return view.slots[n] end
+  view.slots[n] = view.MakeSlot("PandaUIBankViewSlot" .. n, view.grid)
+  return view.slots[n]
+end
 
-  local name = "PandaUIBankViewSlot" .. n
-  local button = CreateFrame("Button", name, view.grid)
+function view.MakeSlot(name, parent)
+  local button = CreateFrame("Button", name, parent)
   button:SetWidth(SLOT_SIZE)
   button:SetHeight(SLOT_SIZE)
 
@@ -386,7 +399,6 @@ function view.EnsureSlot(n)
     view.HideTooltip(button)
   end)
 
-  view.slots[n] = button
   return button
 end
 
@@ -426,10 +438,155 @@ function view.FillSlot(button, item)
 end
 
 -- ---------------------------------------------------------------------------
+-- Category view
+--
+-- The bag window's category setting applies here too (user request,
+-- 2026-10-28): the shared view (modules/bagcategoryview.lua) draws the saved
+-- items with the same sections, order and folds as the live bank
+-- (U.BagsCategoryCollapsed("bank")). It reads the snapshot through the host's
+-- readers instead of the containers, and its free-slot proxy is one more
+-- display slot, so the window stays read-only.
+-- ---------------------------------------------------------------------------
+view.catSlots = {}  -- catSlots[bagId][slot] = display button (host.slots)
+view.catBags = {}   -- saved container ids, in display order
+view.byBag = {}     -- byBag[bagId] = { bag = saved entry, offset = n before it }
+view.folds = {}     -- fallback fold table if the bag module is absent
+
+function view.CategoriesWanted(db)
+  return table.getn(db.bags) > 0 and
+         type(U.CreateBagCategoryView) == "function" and
+         type(U.BagsCategoriesEnabled) == "function" and
+         U.BagsCategoriesEnabled()
+end
+
+function view.SavedItem(bag, slot)
+  local entry = view.byBag[bag]
+  return entry and entry.bag.items[slot]
+end
+
+function view.SavedCategory(bag, slot)
+  local item = view.SavedItem(bag, slot)
+  if not item then return "empty" end
+  local key = "unknown"
+  if type(U.ItemCategoryFromLink) == "function" then
+    key = U.ItemCategoryFromLink(item.l)
+  end
+  -- The snapshot marked the item a quest item when the client said so.
+  if item.k and (key == "misc" or key == "unknown") then key = "quest" end
+  return key
+end
+
+function view.CategorySlot(bag, slot)
+  local entry = view.byBag[bag]
+  if not entry then return nil end
+  local button = view.EnsureSlot(entry.offset + slot)
+  if not view.catSlots[bag] then view.catSlots[bag] = {} end
+  view.catSlots[bag][slot] = button
+  return button
+end
+
+function view.PlaceCategorySlot(button, relative, x, y)
+  button:ClearAllPoints()
+  button:SetPoint("TOPLEFT", relative, "TOPLEFT", x, y)
+end
+
+function view.FillCategorySlot(bag, slot)
+  local bagSlots = view.catSlots[bag]
+  local button = bagSlots and bagSlots[slot]
+  if button then view.FillSlot(button, view.SavedItem(bag, slot)) end
+end
+
+-- The free-slot count: a display slot with no item and no mouse input.
+function view.BuildCategoryProxy(parent, name)
+  local button = view.MakeSlot(name, parent)
+  pcall(button.EnableMouse, button, false)
+  view.FillSlot(button, nil)
+  return button
+end
+
+function view.CategoryFolds()
+  if type(U.BagsCategoryCollapsed) == "function" then
+    local folds = U.BagsCategoryCollapsed("bank")
+    if type(folds) == "table" then return folds end
+  end
+  return view.folds
+end
+
+function view.CategoryLayoutDone(width, height)
+  local frame = view.frame
+  frame:SetWidth(width + view.SidePad() * 2)
+  frame:SetHeight(view.Height(view.Header() + height + view.BottomPad()))
+  if view.Modern() then U.ModernWowBagHousing(frame) end
+end
+
+function view.EnsureCategoryView()
+  if view.cat then return view.cat end
+  view.cat = U.CreateBagCategoryView({
+    grid = view.grid,
+    name = "PandaUIBankView",
+    columns = COLUMNS,
+    slotSize = SLOT_SIZE,
+    slotGap = view.SlotGap,
+    bags = function() return view.catBags end,
+    slotCount = function(bag)
+      local entry = view.byBag[bag]
+      return entry and entry.bag.size or 0
+    end,
+    slots = view.catSlots,
+    ensureSlot = view.CategorySlot,
+    placeSlot = view.PlaceCategorySlot,
+    updateSlot = view.FillCategorySlot,
+    collapsed = view.CategoryFolds,
+    categoryFor = view.SavedCategory,
+    linkFor = function(bag, slot)
+      local item = view.SavedItem(bag, slot)
+      return item and item.l
+    end,
+    specialtyLabel = function(bag)
+      local entry = view.byBag[bag]
+      return entry and entry.bag.label
+    end,
+    buildProxy = view.BuildCategoryProxy,
+    onLayout = view.CategoryLayoutDone,
+  })
+  return view.cat
+end
+
+function view.LayoutCategories(db)
+  local cat = view.EnsureCategoryView()
+  local offset = 0
+  local i, bag
+
+  view.byBag = {}
+  view.catBags = {}
+  for i = 1, table.getn(db.bags) do
+    local entry = db.bags[i]
+    view.byBag[entry.id] = { bag = entry, offset = offset }
+    table.insert(view.catBags, entry.id)
+    offset = offset + entry.size
+  end
+
+  -- The flat grid's buttons all go; the view shows the ones it places. The
+  -- slot map is emptied in place because the host holds this very table.
+  for i = 1, table.getn(view.slots) do
+    view.slots[i]:Hide()
+    view.slots[i].puiItem = nil
+  end
+  for bag in pairs(view.catSlots) do view.catSlots[bag] = nil end
+  if view.grid.empty then view.grid.empty:Hide() end
+
+  cat.host.columns = view.Geometry()
+  cat.Layout()
+end
+
+-- ---------------------------------------------------------------------------
 -- Window
 -- ---------------------------------------------------------------------------
 function view.Layout()
   local db = view.EnsureStore()
+  if view.CategoriesWanted(db) then return view.LayoutCategories(db) end
+  if view.cat then view.cat.Clear() end
+
   local n, x, y = 0, 0, 0
   local gap = view.SlotGap()
   local i
@@ -486,7 +643,12 @@ end
 function view.Resize(width, height)
   local gap = view.SlotGap()
   local pitch = SLOT_SIZE + gap
-  local columns = math.floor((width - view.SidePad() * 2 + gap) /
+  -- Same rule as the live bank: the category boxes' insets are not columns.
+  local inset = 0
+  if view.CategoriesWanted(view.EnsureStore()) then
+    inset = U.ModernWowBagMetric("sectionInset", M.bagCategory.inset) * 2
+  end
+  local columns = math.floor((width - view.SidePad() * 2 - inset + gap) /
                              pitch + 0.5)
   columns = math.max(view.MIN_COLUMNS, math.min(view.MaxColumns(), columns))
   local minimum = view.Header() + view.BottomPad() + SLOT_SIZE
@@ -750,6 +912,8 @@ end
 
 function BV:OnEnable()
   if view.frame then return end
+  -- Opened from the PandaUI bag, so it follows the bag's Enable switch.
+  if type(U.BagsEnabled) == "function" and not U.BagsEnabled() then return end
 
   view.EnsureStore()
   view.Build()

@@ -1,6 +1,7 @@
 -- pandaUI :: modules/nameplatesettings.lua
 --
--- The Nameplates settings group: General, Health, Target and Raid Mark pages.
+-- The Nameplates settings group: General, Health, Target, Raid Mark and Tank
+-- Mode pages.
 -- State and behaviour stay in modules/nameplates.lua; every control here reads
 -- through U.NameplateSetting and writes through U.SetNameplateSetting, which
 -- redraws the live plates at once.
@@ -168,6 +169,21 @@ nps.PAGES = {
       min = -40, max = 40, step = 1 },
     { type = "slider", key = "raidIconY", text = "NP_RAID_ICON_Y",
       min = -40, max = 40, step = 1, col = 2 },
+  },
+  {
+    id = "tank", label = "NP_TAB_TANK",
+    { type = "nampower" },
+    { type = "header", text = "NP_HEADER_TANK" },
+    { type = "check", key = "tankMode", text = "NP_TANK_MODE" },
+    { type = "note", text = "NP_TANK_MODE_HINT", lines = 3 },
+    { type = "color", key = "tankAggro", text = "NP_TANK_AGGRO" },
+    { type = "color", key = "tankNoAggro", text = "NP_TANK_NO_AGGRO", col = 2 },
+    { type = "note", text = "NP_TANK_COLORS_HINT", lines = 3 },
+    { type = "header", text = "NP_HEADER_TANK_INACTIVE" },
+    { type = "check", key = "tankShowInactive", text = "NP_TANK_INACTIVE" },
+    { type = "color", key = "tankInactive", text = "NP_TANK_INACTIVE_COLOR",
+      col = 2 },
+    { type = "note", text = "NP_TANK_INACTIVE_HINT", lines = 3 },
   },
 }
 

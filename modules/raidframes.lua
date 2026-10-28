@@ -1322,6 +1322,10 @@ end
 -- Polled every tick: PARTY_MEMBERS_CHANGED was never observed on this client
 -- (modules/unitframes.lua header), so the roster cannot wait for it.
 local function PartyShape()
+  if type(U.PartyFramesSuppressedByRaid) == "function" and
+     U.PartyFramesSuppressedByRaid() then
+    return "R"
+  end
   local shape = (Unlocked() and "U" or "-") ..
                 (PartyPlayerWanted() and "P" or "-")
   local i
@@ -1387,6 +1391,12 @@ local function LayoutParty()
   end
 
   party.shape = PartyShape()
+  if party.shape == "R" then
+    party.count = 0
+    HidePool(party.cells, 1)
+    if party.root then party.root:Hide() end
+    return
+  end
   Geometry()
   local geo = rf.partyGeo
   local list = ReadPartyRoster()

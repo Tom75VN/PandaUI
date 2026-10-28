@@ -275,6 +275,12 @@ under the same RLE-TGA contract as everything else here.
 | `raid/bar-resource-fill.tga` | 32x8 | `Raid-Bar-Resource-Fill.PNG` | Blizzard Retail `Interface\RaidFrame\Raid-Bar-Resource-Fill`, the whole 32x8 file; rows 0-6 are the shaded power fill. |
 | `raid/bar-resource-bg.tga` | 32x8 | `Raid-Bar-Resource-Background.PNG` | Blizzard Retail `Interface\RaidFrame\Raid-Bar-Resource-Background`, the whole 32x8 file; rows 0-6 are the power strip's background. |
 | `raid/dispel-vertical.tga` | 64x32 | `7539090.png` | Forever FileDataID 7539090 (atlas 3711), the whole 64x32 sheet: `!RaidFrame-Dispel-Vertical` L=1 R=41 T=0 B=8, the dispel overlay gradient of the BuffsRightDebuffsLeft aura organization (Blizzard_PrivateAurasUI.lua, HorizontalLeftToRight). |
+| `minimap/square-mask.tga` | 64x64 | `square-mask.blp` | Blizzard Retail 12.1.0.69933 `SquareMask`, FileDataID 4733159 / atlas 2200, the whole 64x64 `interface/masks/squaremask.blp` sheet. The raw BLP was fetched from the pinned build through the Wago CASC endpoint and converted pixel-identically to 32-bit RLE TGA. Used only as the Modern WoW square minimap mask. |
+| `minimap/square-frame.tga` | 512x512 | `MinimapSquareJag.png` | WoW-DragonflightUI `Textures/MinimapSquareJag.png`, the authored 512x512 square minimap frame used by its SQUARE shape path (`Modules/Minimap/Minimap.mixin.lua:960-968`). Copyright (c) 2022 Karl-HeinzSchneider; MIT License. Converted pixel-identically to 32-bit RLE TGA (source SHA-256 97FFFAE98DD1F9F368302DB336BCF5AF2DBF937276B4CBB93C736CD9DD53A85B). |
+
+
+
+
 
 
 

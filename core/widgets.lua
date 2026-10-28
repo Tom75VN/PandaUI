@@ -1035,13 +1035,17 @@ function U.CreateDropdown(parent, options)
     control.SetOpen(false)
   end)
 
-  local i
-  for i = 1, table.getn(items) do
-    local item = items[i]
+  -- Rows are pooled so SetItems can reuse them; a later row takes the menu's
+  -- current width, which a settings skin may have changed.
+  control.pool = {}
+  local function BuildRow(i, item)
+    local rowWidth = width
+    local okWidth, menuWidth = pcall(menu.GetWidth, menu)
+    if okWidth and tonumber(menuWidth) and menuWidth > 2 then rowWidth = menuWidth end
     local row = U.CreateButton(menu, {
       name = options.name and (options.name .. "Item" .. i) or nil,
       text = item.text or tostring(item.value or ""),
-      width = width - 2,
+      width = rowWidth - 2,
       height = rowHeight,
     })
     row.item = item
@@ -1050,7 +1054,7 @@ function U.CreateDropdown(parent, options)
     if row.label then
       row.label:ClearAllPoints()
       row.label:SetPoint("LEFT", row, "LEFT", 7, U.BUTTON_LABEL_OFFSET_Y)
-      pcall(row.label.SetWidth, row.label, width - 16)
+      pcall(row.label.SetWidth, row.label, rowWidth - 16)
       pcall(row.label.SetJustifyH, row.label, "LEFT")
       -- item.fontId draws this row in that face (the font dropdown's preview).
       if item.fontId then U.SetFontFace(row.label, item.fontId) end
@@ -1071,7 +1075,46 @@ function U.CreateDropdown(parent, options)
       control.SetValue(row.item.value, true)
       control.SetOpen(false)
     end)
-    table.insert(control.rows, row)
+    control.pool[i] = row
+    return row
+  end
+
+  local i
+  for i = 1, table.getn(items) do
+    table.insert(control.rows, BuildRow(i, items[i]))
+  end
+
+  -- Replaces the choices without notifying, then selects `value` or the first
+  -- enabled item.
+  control.SetItems = function(newItems, value)
+    control.SetOpen(false)
+    local k
+    for k = table.getn(items), 1, -1 do table.remove(items, k) end
+    for k = 1, table.getn(newItems or {}) do items[k] = newItems[k] end
+    local rows = {}
+    for k = 1, table.getn(items) do
+      local item = items[k]
+      local row = control.pool[k] or BuildRow(k, item)
+      row.item = item
+      pcall(row.EnableMouse, row, not item.disabled)
+      if row.label then row.label:SetText(item.text or tostring(item.value or "")) end
+      rows[k] = row
+    end
+    for k = table.getn(items) + 1, table.getn(control.pool) do
+      SetDropdownPartShown(control.pool[k], false)
+    end
+    control.rows = rows
+    pcall(menu.SetHeight, menu, math.max(1, table.getn(items)) * rowHeight + 2)
+    control.value = nil
+    if not control.SetValue(value, false) then
+      for k = 1, table.getn(items) do
+        if not items[k].disabled then
+          control.SetValue(items[k].value, false)
+          break
+        end
+      end
+    end
+    ApplySelection()
   end
 
   if not control.SetValue(options.value, false) then

@@ -335,6 +335,10 @@ function U.ItemCategoryFavorite()
 end
 
 function U.ItemCategoryLabel(key)
+  if type(U.CustomCategoryLabel) == "function" then
+    local custom = U.CustomCategoryLabel(key)
+    if custom then return custom end
+  end
   local locale = IC.label[key]
   if not locale then return key or "" end
   return U.L(locale)

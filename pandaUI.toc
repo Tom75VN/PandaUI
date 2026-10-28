@@ -2,7 +2,7 @@
 ## Title: |cffffffffPanda |cfff5ae0aUI
 ## Notes: UI addon for the OctoWoW client (1.12.1, Lua 5.0), ported from UnrealUI.
 ## Author: Thomas
-## Version: 0.12.2
+## Version: 0.13.0
 ## X-Ported-From: UnrealUI 0.10.2
 ## X-License: MIT
 ## SavedVariables: PandaUIDB, PandaUIProfiles, PandaUIDiagDB, PandaUIPriceDB
@@ -160,6 +160,8 @@ modules\bagfavorites.lua
 modules\bagdesign.lua
 # The category view shared by the bag and bank windows; loaded before both.
 modules\bagcategoryview.lua
+# The player's own categories, read by the category view.
+modules\bagcustomcategories.lua
 modules\bags.lua
 # Moves newly arrived items into a matching specialty bag (category view).
 modules\bagroute.lua

@@ -18,9 +18,9 @@
 -- every call is resolved by name and pcalled, so a missing or failing one
 -- only leaves the cache emptier.
 --
--- The roster gives a localized class name and no token. The token is learned
--- from UnitClass reads (localized -> token) and resolved when asked, so a
--- roster entry gains its colour once anyone of that class has been seen.
+-- The roster gives a localized class name and no token. Standard localized
+-- names resolve directly; UnitClass reads also teach the cache any client
+-- spelling it did not already know.
 --
 -- Names are unique per realm, but a player and a creature can share one;
 -- callers decide whether the name on their frame is a player.
@@ -35,6 +35,26 @@ P.count = 0
 P.LIMIT = 3000
 -- localized class name -> token, learned from UnitClass
 P.tokenOf = {}
+P.staticTokenOf = {
+  ["Death Knight"] = "DEATHKNIGHT", ["Deathknight"] = "DEATHKNIGHT",
+  ["Warlock"] = "WARLOCK", ["Warrior"] = "WARRIOR",
+  ["Hunter"] = "HUNTER", ["Mage"] = "MAGE", ["Priest"] = "PRIEST",
+  ["Druid"] = "DRUID", ["Paladin"] = "PALADIN", ["Shaman"] = "SHAMAN",
+  ["Rogue"] = "ROGUE",
+  ["Démoniste"] = "WARLOCK", ["Guerrier"] = "WARRIOR",
+  ["Chevalier de la mort"] = "DEATHKNIGHT",
+  ["Chasseur"] = "HUNTER", ["Prêtre"] = "PRIEST", ["Druide"] = "DRUID",
+  ["Chaman"] = "SHAMAN", ["Voleur"] = "ROGUE",
+  ["Чернокнижник"] = "WARLOCK", ["Воин"] = "WARRIOR",
+  ["Рыцарь смерти"] = "DEATHKNIGHT",
+  ["Охотник"] = "HUNTER", ["Маг"] = "MAGE", ["Жрец"] = "PRIEST",
+  ["Друид"] = "DRUID", ["Паладин"] = "PALADIN", ["Шаман"] = "SHAMAN",
+  ["Разбойник"] = "ROGUE",
+  ["术士"] = "WARLOCK", ["战士"] = "WARRIOR", ["猎人"] = "HUNTER",
+  ["死亡骑士"] = "DEATHKNIGHT",
+  ["法师"] = "MAGE", ["牧师"] = "PRIEST", ["德鲁伊"] = "DRUID",
+  ["圣骑士"] = "PALADIN", ["萨满祭司"] = "SHAMAN", ["盗贼"] = "ROGUE",
+}
 P.ROSTER_INTERVAL = 120
 
 local function Call(name, a, b)
@@ -60,6 +80,15 @@ function P.Add(name, token, localized, guild)
     P.players[name] = entry
     P.count = P.count + 1
   end
+  local static = type(localized) == "string" and P.staticTokenOf[localized]
+  if static then
+    -- Standard localized names are authoritative. guildcolors.v1 caught the
+    -- learned table mapping every roster class to the player's MAGE token.
+    token = static
+  elseif (type(token) ~= "string" or token == "") and
+         type(localized) == "string" then
+    token = P.tokenOf[localized]
+  end
   if type(token) == "string" and token ~= "" then entry.class = token end
   if type(localized) == "string" and localized ~= "" then
     entry.localized = localized
@@ -76,7 +105,10 @@ function P.LearnUnit(unit)
   if not Truth(Call("UnitIsPlayer", unit)) then return end
   local name = Call("UnitName", unit)
   local localized, token = Call("UnitClass", unit)
-  if type(localized) == "string" and type(token) == "string" then
+  local static = type(localized) == "string" and P.staticTokenOf[localized]
+  if static then
+    token = static
+  elseif type(localized) == "string" and type(token) == "string" then
     P.tokenOf[localized] = token
   end
   local guild = Call("GetGuildInfo", unit)
@@ -114,8 +146,29 @@ end
 function U.PlayerInfo(name)
   local entry = name and P.players[name]
   if not entry then return nil, nil end
-  local token = entry.class or (entry.localized and P.tokenOf[entry.localized])
+  local token
+  if entry.localized then
+    token = P.staticTokenOf[entry.localized] or P.tokenOf[entry.localized]
+  end
+  token = token or entry.class
   return token, entry.guild
+end
+
+function U.PlayerClassToken(localized)
+  -- No argument means the current player's token. Unit-frame settings and
+  -- equipment-set validation use this form, so the shared helper owns both
+  -- meanings instead of allowing a later module to replace it globally.
+  if localized == nil then
+    local _, token = Call("UnitClass", "player")
+    if type(token) == "string" and token ~= "" then return token end
+    return nil
+  end
+  if type(localized) ~= "string" then return nil end
+  return P.staticTokenOf[localized] or P.tokenOf[localized]
+end
+
+function U.PlayerCacheRemember(name, localized, guild)
+  P.Add(name, U.PlayerClassToken(localized), localized, guild)
 end
 
 -- Public: whether the name was ever read as a player.

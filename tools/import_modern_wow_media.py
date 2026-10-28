@@ -28,6 +28,7 @@ Run from the pandaUI addon folder:
     python -B tools/import_modern_wow_media.py
 """
 
+import hashlib
 import math
 import os
 import re
@@ -187,6 +188,19 @@ IMPORTS = [
 #
 # (destination name, the filename it was supplied as, note[, on-disk input])
 USER_SUPPLIED = [
+    ("minimap/square-frame", "MinimapSquareJag.png",
+     "WoW-DragonflightUI `Textures/MinimapSquareJag.png`, the authored "
+     "512x512 square minimap frame used by its SQUARE shape path "
+     "(`Modules/Minimap/Minimap.mixin.lua:960-968`). Copyright (c) 2022 "
+     "Karl-HeinzSchneider; MIT License. Converted pixel-identically to "
+     "32-bit RLE TGA (source SHA-256 "
+     "97FFFAE98DD1F9F368302DB336BCF5AF2DBF937276B4CBB93C736CD9DD53A85B)."),
+    ("minimap/square-mask", "square-mask.blp",
+     "Blizzard Retail 12.1.0.69933 `SquareMask`, FileDataID 4733159 / "
+     "atlas 2200, the whole 64x64 `interface/masks/squaremask.blp` sheet. "
+     "The raw BLP was fetched from the pinned build through the Wago CASC "
+     "endpoint and converted pixel-identically to 32-bit RLE TGA. Used only "
+     "as the Modern WoW square minimap mask."),
     ("minimap/uiminimap2x", "uiminimap2x.tga",
      "Blizzard Retail HD minimap atlas, FileDataID 4618666 / atlas 1995, "
      "512x1024. PandaUI uses `UI-HUD-Minimap-Arrow-Guard` at L=441 R=486 "
@@ -2108,6 +2122,76 @@ def import_minimap_corpse_arrow(dest_root):
     }
 
 
+def import_minimap_square_mask(dest_root):
+    """Convert Retail's exact SquareMask sheet and return its attribution row."""
+    dest_name = "minimap/square-mask"
+    dst = os.path.join(dest_root, dest_name.replace("/", os.sep) + ".tga")
+    source = os.environ.get(
+        "PANDAUI_MINIMAP_SQUARE_MASK_SOURCE",
+        os.path.join(dest_root, "minimap", "square-mask.blp"))
+    if not os.path.isfile(source) and os.path.isfile(dst):
+        source = dst
+    if not os.path.isfile(source):
+        raise IOError("Retail SquareMask source missing: %s" % source)
+
+    source_image, _ = open_source(source)
+    image = source_image.convert("RGBA")
+    source_image.close()
+    if image.size != (64, 64):
+        raise ValueError("unexpected Retail SquareMask size %dx%d" % image.size)
+    if image.getextrema() != ((248, 248), (252, 252), (248, 248),
+                             (255, 255)):
+        raise ValueError("unexpected Retail SquareMask pixels")
+
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    width, height = write_rle_tga(image, dst)
+    image.close()
+    return {
+        "dest": dest_name + ".tga",
+        "size": "%dx%d" % (width, height),
+        "supplied": "square-mask.blp",
+        "note": "Blizzard Retail 12.1.0.69933 `SquareMask`, FileDataID "
+                "4733159 / atlas 2200, the whole 64x64 "
+                "`interface/masks/squaremask.blp` sheet. The raw BLP was "
+                "fetched from the pinned build through the Wago CASC "
+                "endpoint and converted pixel-identically to 32-bit RLE "
+                "TGA. Used only as the Modern WoW square minimap mask.",
+    }
+
+
+def import_minimap_square_frame(dest_root):
+    """Convert DragonflightUI's exact square minimap frame."""
+    dest_name = "minimap/square-frame"
+    dst = os.path.join(dest_root, dest_name.replace("/", os.sep) + ".tga")
+    source = os.environ.get("PANDAUI_MINIMAP_SQUARE_FRAME_SOURCE", dst)
+    if not os.path.isfile(source):
+        raise IOError("DragonflightUI square minimap frame missing: %s" % source)
+
+    source_image, _ = open_source(source)
+    image = source_image.convert("RGBA")
+    source_image.close()
+    if image.size != (512, 512):
+        raise ValueError("unexpected square minimap frame size %dx%d" % image.size)
+    pixels_hash = hashlib.sha256(image.tobytes()).hexdigest().upper()
+    if pixels_hash != "127C7B4A55D070D76E8272EB25C252FBB9244F55169DB31D057F4EF15AAA0DF2":
+        raise ValueError("unexpected square minimap frame pixels")
+
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    width, height = write_rle_tga(image, dst)
+    image.close()
+    return {
+        "dest": dest_name + ".tga",
+        "size": "%dx%d" % (width, height),
+        "supplied": "MinimapSquareJag.png",
+        "note": "WoW-DragonflightUI `Textures/MinimapSquareJag.png`, the "
+                "authored 512x512 square minimap frame used by its SQUARE "
+                "shape path (`Modules/Minimap/Minimap.mixin.lua:960-968`). "
+                "Copyright (c) 2022 Karl-HeinzSchneider; MIT License. "
+                "Converted pixel-identically to 32-bit RLE TGA (source "
+                "SHA-256 97FFFAE98DD1F9F368302DB336BCF5AF2DBF937276B4CBB93C736CD9DD53A85B).",
+    }
+
+
 def write_attribution(dest_root, rows, user_rows):
     lines = [
         "# modern-wow texture attribution",
@@ -2503,6 +2587,15 @@ def main_minimap_player_arrow():
     return 0
 
 
+def main_minimap_square_assets():
+    """Rebuild the square minimap frame and mask attribution rows."""
+    dest_root = os.path.join(os.getcwd(), DEST_SUBPATH)
+    rows = [import_minimap_square_frame(dest_root),
+            import_minimap_square_mask(dest_root)]
+    upsert_user_rows(dest_root, rows)
+    return 0
+
+
 def main_bag_indicator():
     """Re-copy only Combined Bags' Retail item-slot highlight."""
     dest_root = os.path.join(os.getcwd(), DEST_SUBPATH)
@@ -2886,7 +2979,10 @@ def main_character_reputation():
 
 if __name__ == "__main__":
     selected = main
-    if "--minimap-player-arrow" in sys.argv[1:]:
+    if "--minimap-square-assets" in sys.argv[1:] or \
+       "--minimap-square-mask" in sys.argv[1:]:
+        selected = main_minimap_square_assets
+    elif "--minimap-player-arrow" in sys.argv[1:]:
         selected = main_minimap_player_arrow
     elif "--cooldown-manager" in sys.argv[1:]:
         selected = main_cooldown_manager

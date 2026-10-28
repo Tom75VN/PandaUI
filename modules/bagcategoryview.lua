@@ -73,6 +73,12 @@ function U.SetBagCategoryDropSource(source)
   CV.drop.source = source
 end
 
+-- The record for the item on the cursor, when a PandaUI slot put it there.
+function U.BagCategoryCursorSource()
+  if not U.CursorHasItem() then return nil end
+  return CV.drop.source
+end
+
 function CV.drop.AuctionSubclasses(classIndex)
   if CV.drop.subclasses[classIndex] then
     return CV.drop.subclasses[classIndex]
@@ -258,6 +264,17 @@ function CV.BuildEmptyProxy(view)
     pcall(root.SetFrameLevel, root, level + 5)
   end
 
+  -- A read-only host (the saved bank, modules/bankview.lua) builds its own
+  -- display button: the proxy then only shows the free-slot count, and
+  -- nothing on it can reach a container API.
+  if type(view.host.buildProxy) == "function" then
+    local shown = view.host.buildProxy(root, view.host.name .. "EmptyProxy")
+    if not shown then return nil end
+    shown:Hide()
+    view.emptyProxy = shown
+    return shown
+  end
+
   local button = U.CreateItemSlot(root, view.host.name .. "EmptyProxy", 0, 0)
   if not button then return nil end
 
@@ -437,12 +454,23 @@ function CV.Collect(view)
     favoriteKey = U.ItemCategoryFavorite()
   end
 
+  -- A host showing saved data rather than live containers reads its own
+  -- category, link and specialty label; the live windows use the defaults.
+  local categoryFor = host.categoryFor or U.ItemCategoryForSlot
+  local linkFor = host.linkFor or U.ContainerSlotLink
+  local specialtyFor = host.specialtyLabel or U.BagSpecialtyLabel
+  -- Saved data has no live slot to read a tooltip from.
+  local scan = host.categoryFor == nil
+  local customFor = type(U.CustomItemCategory) == "function" and
+                    type(U.HasCustomCategories) == "function" and
+                    U.HasCustomCategories() and U.CustomItemCategory or nil
+
   for i = 1, table.getn(bags) do
     local bag = bags[i]
     local n = tonumber(host.slotCount(bag)) or 0
 
-    local label = type(U.BagSpecialtyLabel) == "function" and
-                  U.BagSpecialtyLabel(bag) or nil
+    local label = type(specialtyFor) == "function" and
+                  specialtyFor(bag) or nil
     local specialKey = label and ("specialbag_" .. bag) or nil
     if specialKey then
       buckets[specialKey] = {
@@ -456,7 +484,7 @@ function CV.Collect(view)
     for slot = 1, n do
       total = total + 1
 
-      local key = U.ItemCategoryForSlot(bag, slot)
+      local key = categoryFor(bag, slot)
       if key == "empty" then
         table.insert(empty, {
           id = 0, emptySlot = 1, bagNum = bag, slotNum = slot,
@@ -478,6 +506,15 @@ function CV.Collect(view)
                        U.IsBagSlotFavorite(bag, slot)
       if favorite then
         key = favoriteKey
+      elseif key ~= "empty" and customFor then
+        -- modules/bagcustomcategories.lua: the player's own categories come
+        -- before the built-in one, and lift an item out of a specialty bag
+        -- the same way a favourite mark does.
+        local custom = customFor(linkFor(bag, slot), bag, slot, scan)
+        if custom then
+          key = custom
+          favorite = true
+        end
       end
       if key ~= "empty" then
         used = used + 1
@@ -490,7 +527,7 @@ function CV.Collect(view)
         -- headings own the first level, and this shared key groups functional
         -- kinds (healing potions, mana potions, etc.) plus identical items
         -- inside each heading. Coordinates make equal stacks deterministic.
-        local link = U.ContainerSlotLink(bag, slot)
+        local link = linkFor(bag, slot)
         local sort = U.ItemSortKey(link) ..
           string.format("|%02d|%04d", bag + 2, slot)
         table.insert(buckets[key].entries,
@@ -665,6 +702,12 @@ function CV.Layout(view)
   local collapsed = host.collapsed()
   local buckets, special, empty, usedSlots, totalSlots = CV.Collect(view)
   local order = U.ItemCategoryOrder()
+  -- Custom categories follow Favourites, in their own priority order.
+  if type(U.CustomCategoryOrder) == "function" then
+    local custom = U.CustomCategoryOrder()
+    local at = (order[1] == U.ItemCategoryFavorite()) and 2 or 1
+    for i = table.getn(custom), 1, -1 do table.insert(order, at, custom[i]) end
+  end
   local live = {}    -- every (bag, slot) this pass actually placed
   local drawn = {}   -- every category this pass actually drew
   local visible = {} -- ordered categories with at least one item
@@ -971,6 +1014,9 @@ end
 --   styleBox(box), onSlotCount(used, total), onLayout(width, height),
 --   onDropped()  -- all optional
 --   fullText    locale key printed when a proxy drop finds no free slot
+--   categoryFor(bag, slot), linkFor(bag, slot), specialtyLabel(bag),
+--   buildProxy(parent, name) -> button  -- optional; a read-only host that
+--               draws saved data (modules/bankview.lua) supplies all four
 -- }
 function U.CreateBagCategoryView(host)
   local view = { host = host, sections = {}, emptySlots = {} }

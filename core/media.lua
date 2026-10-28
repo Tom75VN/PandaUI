@@ -519,6 +519,8 @@ M.modernWow.texture = {
 
   minimapBorder      = M.modernWow.path .. "minimap\\uiminimapborder",
   minimapShadow      = M.modernWow.path .. "minimap\\uiminimapshadow",
+  minimapSquareMask  = M.modernWow.path .. "minimap\\square-mask",
+  minimapSquareFrame = M.modernWow.path .. "minimap\\square-frame",
   minimapTopPanel    = M.modernWow.path .. "minimap\\uiminimap_toppanel",
   minimapCorpseArrow = M.modernWow.path ..
                        "minimap\\uiminimap-corpse-arrow-frames",
@@ -996,6 +998,8 @@ M.minimapRoundMask = "Textures\\MinimapMask"
 M.modernWow.minimap = {
   borderOffset = 10,
   shadowAlpha = 0.3,
+  squareBorderOffset = 13,
+  squareBorderYOffset = 1,
   topPanelHeight = 12,
   topPanelGap = 18,
   topPanelRightOverhang = 5,
@@ -1029,6 +1033,11 @@ M.modernWow.minimap = {
   -- 0.64 (-20.6, 47.8 there: -5 plus 10 screen px left, 40 plus 5 px up).
   zoomX = -30.294,
   zoomY = 70.294,
+  -- Square maps group the zoom buttons below the bottom-right edge.
+  -- These are screen-space units; the placement path accounts for zoomScale.
+  squareZoomRightInset = 3,
+  squareZoomBottomGap = 3,
+  squareZoomGap = 2,
   mailX = -2,
   mailY = -1,
   -- No mail size here any more: the letter is the shared flipbook
@@ -1244,13 +1253,13 @@ M.modernWow.social = {
   -- Friends/Ignore toggles: the tab atlas at a smaller scale than the bottom
   -- row (0.75 / 27 high), and started `ringGap` right of the portrait ring's
   -- right edge (x `ringRight`) so the first tab clears the gold rim.
-  -- `textY` is the label's centre offset (positive up); the flipped art
-  -- would otherwise give -2.
-  toggleTab = { scale = 0.6, height = 21, textY = -5 },
+  -- `textY` is the label's centre offset (positive up). Zero centres the
+  -- label on the flipped texture instead of leaving it below the artwork.
+  toggleTab = { scale = 0.6, height = 21, textY = -3 },
   ringRight = 72,
   ringGap = 6,
   -- The toggle run's lift above its list's top edge (the flat design uses 3).
-  toggleY = 6,
+  toggleY = 3,
   -- The Friends list's four footer actions: fixed width (the flat design's
   -- 158 less 6) and the native height plus `heightGrow`. `x`/`y` move the
   -- whole run relative to where the flat design puts it -- positive x right,
@@ -1262,7 +1271,7 @@ M.modernWow.social = {
   -- `raise`: the Friends footer buttons alone sit this much higher (user,
   -- 2026-09-20); the footer plate keeps its place.
   footerButton = { width = 152, heightGrow = 4, x = 3, y = -11, pull = 2,
-                   raise = 2 },
+                   raise = 2, joinY = 3 },
   -- The Guild tab's three actions, moved as one row (positive x right,
   -- negative y down; user, 2026-09-20).
   -- `motdX`: the message box above them moves this much right on its own.
@@ -1289,8 +1298,9 @@ M.modernWow.social = {
                    leftTextY = -3,
                    -- `rowsDrop`: the 13 roster rows, moved down as a block.
                    rowsDrop = 4,
-                   -- `offlineDrop`: "Show Offline Members", moved down.
-                   offlineDrop = 6,
+                   -- `offlineDrop` / `offlineRight`: the offline-members
+                   -- control's top/right insets inside the Guild frame.
+                   offlineDrop = 5, offlineRight = 8,
                    -- `statusLabelY`: "Show Player Status" alone (positive up).
                    statusLabelY = 3 },
   -- The Who tab's header band (dropdown + column headers): the footer's own
@@ -1369,12 +1379,20 @@ M.modernWow.social = {
     friendsBedTopY = -2,
     -- ...and its bottom edge alone this much further (negative is down).
     friendsBedBottomY = -5,
-    -- ...and its up arrow alone this much higher.
-    friendsUpY = 2,
-    -- Friends thumb range: its top stop / bottom stop this much lower, and
-    -- the down arrow this much lower in total (user, 2026-09-20).
-    friendsThumbTop = 2,
-    friendsThumbBottom = 1,
+    -- ...and its up arrow alone this much higher. The extra 3 cancels the
+    -- thumb range's top inset, keeping the top arrow in its established seat.
+    friendsUpY = 5,
+    -- Friends scrollbar assembly: shift the bar and its native track left
+    -- and down together, then keep the existing thumb/arrow fine tuning.
+    friendsBarX = -4,
+    friendsBarY = 4,
+    -- Inset the thumb's extreme positions: 3 lower at the top, 4 higher at
+    -- the bottom. Track compensation keeps the background itself stationary.
+    friendsThumbTop = 5,
+    friendsThumbBottom = 0,
+    friendsTrackTopY = 3,
+    friendsTrackBottomY = -4,
+    friendsArrowSize = 18,
     friendsDownY = 5,
     -- Friends, Who and Guild channels: drawn at this opacity (40% less, user
     -- 2026-09-20). Frame alpha, not the fill's: texture alpha is unreliable

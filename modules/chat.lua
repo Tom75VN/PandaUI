@@ -19,6 +19,32 @@ local POSITION_INTERVAL = 0.15
 local RESTORE_PASSES = 8
 local DRIFT_EPSILON = 1
 local ALPHA_EPSILON = 0.01
+local CENTER_INPUT_UPDATE_ID = "chat.input.center"
+local CENTER_INPUT_INTERVAL = 0.25
+local CHAT_DEFAULTS = {
+  resized = false,
+  width = 0,
+  height = 0,
+  left = 0,
+  bottom = 0,
+  noTextShadow = false,
+  wheelScroll = true,
+  stickyChannels = true,
+  arrowHistory = true,
+  hyperlinks = true,
+  socialColors = true,
+  blockNPCSpam = false,
+  hideWorldInInstances = false,
+  timestamps = false,
+  timestamp24 = true,
+  timestampSeconds = true,
+  timestampBracket = "[]",
+  timestampR = 0.8,
+  timestampG = 0.8,
+  timestampB = 0.8,
+  centerInput = false,
+  outlineText = false,
+}
 -- Consecutive corrections tolerated before the enforcement gives up. At the
 -- position interval this is a few seconds of an unbroken fight with another
 -- owner, which no legitimate late layout produces.
@@ -38,6 +64,17 @@ local enforceStopped = false
 local shadowFonts = {}
 local shadowTouched = false
 local shadowReport = { bound = false, applied = false }
+local qol = {
+  wheel = {},
+  sticky = {},
+  outline = {},
+  input = {},
+  friendRows = {},
+  timestampFormat = "%H:%M:%S",
+  timestampLeft = "[",
+  timestampRight = "]",
+  timestampColor = "|cffcccccc",
+}
 local chatBackground = {
   alpha = 0.25,
   hoverAlpha = 0.5,
@@ -568,7 +605,7 @@ function chatBackground.Apply(enabled)
 end
 
 function U.ApplyChatTextShadow()
-  local remove = config and config.noTextShadow and true or false
+  local remove = config and config.noTextShadow and not config.outlineText and true or false
   chatBackground.Apply(remove)
   if not remove then
     shadowReport.applied = false
@@ -596,15 +633,681 @@ function U.ApplyChatTextShadow()
   return false
 end
 
-function Chat:OnInit()
-  config = U.ModuleConfig("chat", {
-    resized = false,
-    width = 0,
-    height = 0,
-    left = 0,
-    bottom = 0,
-    noTextShadow = false,
+-- ---------------------------------------------------------------------------
+-- Shagu-inspired chat quality-of-life features. Every runtime dependency here
+-- is a stock 1.12 FrameXML function or widget method; no ClassicAPI bridge is
+-- used. Persistent chat history is deliberately outside this module.
+-- ---------------------------------------------------------------------------
+
+local STICKY_TYPES = { "WHISPER", "OFFICER", "RAID_WARNING", "CHANNEL" }
+local INPUT_DODGE_FRAMES = {
+  "MainMenuBar", "MainMenuBarArtFrame", "MultiBarBottomLeft",
+  "MultiBarBottomRight", "PetActionBarFrame", "ShapeshiftBarFrame",
+  "PandaUIPetBarAnchor", "PandaUIStanceBar", "PandaUIActionBar1",
+  "PandaUIActionBar2", "PandaUIActionBar3", "PandaUIActionBar4",
+  "PandaUIActionBar5", "PandaUIActionBar6", "PandaUIActionBar7",
+  "PandaUIActionBar8", "PandaUIActionBar9", "PandaUIActionBar10",
+}
+local BLOCKED_NPCS = {
+  ["Tansy Sparkpen"] = true,
+  ["Fara Boltbreaker"] = true,
+  ["Shellcoin Promoter"] = true,
+  ["tansy sparkpen"] = true,
+  ["fara boltbreaker"] = true,
+  ["shellcoin promoter"] = true,
+  ["Зазывала ярмарки Новолуния"] = true,
+  ["Томас Миллер"] = true, ["Уильям"] = true, ["Донна"] = true,
+  ["Жюстина Демалье"] = true, ["Мерлис Малаган"] = true,
+  ["Лиана Пирс"] = true, ["Сюзанна"] = true, ["Джейни Аншип"] = true,
+}
+local URL_PATTERNS = {
+  { " (www%d-)%.([_A-Za-z0-9-]+)%.(%S+)%s?", "%s.%s.%s" },
+  { " (%a+)://(%S+)%s?", "%s://%s" },
+  { " ([_A-Za-z0-9-%.:]+)@([_A-Za-z0-9-]+)(%.)([_A-Za-z0-9-]+%.?[_A-Za-z0-9-]*)%s?", "%s@%s%s%s" },
+  { " (%d%d?%d?)%.(%d%d?%d?)%.(%d%d?%d?)%.(%d%d?%d?):(%d%d?%d?%d?%d?)%s?", "%s.%s.%s.%s:%s" },
+  { " (%d%d?%d?)%.(%d%d?%d?)%.(%d%d?%d?)%.(%d%d?%d?)%s?", "%s.%s.%s.%s" },
+  { " (%a+)%.(%a+)/(%S+)%s?", "%s.%s/%s" },
+  { " ([_A-Za-z0-9-]+)%.([_A-Za-z0-9-]+)%.(%S+)%:([_0-9-]+)%s?", "%s.%s.%s:%s" },
+  { " ([_A-Za-z0-9-]+)%.([_A-Za-z0-9-]+)%.(%S+)%s?", "%s.%s.%s" },
+}
+
+local function Byte(value)
+  value = tonumber(value) or 0
+  if value < 0 then value = 0 elseif value > 1 then value = 1 end
+  return math.floor(value * 255 + 0.5)
+end
+
+local function ColorCode(r, g, b)
+  return "|cff" .. string.format("%02x%02x%02x", Byte(r), Byte(g), Byte(b))
+end
+
+local function UpdateTimestampFormat()
+  if config.timestamp24 then
+    qol.timestampFormat = config.timestampSeconds and "%H:%M:%S" or "%H:%M"
+  else
+    qol.timestampFormat = config.timestampSeconds and "%I:%M:%S %p" or "%I:%M %p"
+  end
+  local bracket = config.timestampBracket
+  if bracket == "()" then
+    qol.timestampLeft, qol.timestampRight = "(", ")"
+  elseif bracket == "" then
+    qol.timestampLeft, qol.timestampRight = "", ""
+  else
+    qol.timestampLeft, qol.timestampRight = "[", "]"
+  end
+  qol.timestampColor = ColorCode(config.timestampR, config.timestampG,
+                                 config.timestampB)
+end
+
+local function FormatURL(formatter, a1, a2, a3, a4, a5)
+  if not a1 then return "" end
+  local value = string.format(formatter, a1, a2, a3, a4, a5)
+  return " " .. "|cffccccff|Hurl:" .. value .. "|h[" .. value .. "]|h|r "
+end
+
+local function LinkifyURLs(text)
+  local i
+  for i = 1, table.getn(URL_PATTERNS) do
+    local pattern = URL_PATTERNS[i][1]
+    local formatter = URL_PATTERNS[i][2]
+    text = string.gsub(text, pattern,
+      function(a1, a2, a3, a4, a5)
+        return FormatURL(formatter, a1, a2, a3, a4, a5)
+      end)
+  end
+  return text
+end
+
+local function ConvertChatLinks(text)
+  text = string.gsub(text,
+    "{CLINK:(%x+):([%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-):([^}]-)}",
+    "|c%1|Hitem:%2|h[%3]|h|r")
+  text = string.gsub(text,
+    "{CLINK:(%x+):([%d-]-:[%d-]-:[%d-]-:[%d-]-):([^}]-)}",
+    "|c%1|Hitem:%2|h[%3]|h|r")
+  text = string.gsub(text,
+    "{CLINK:item:(%x+):([%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-:[%d-]-):([^}]-)}",
+    "|c%1|Hitem:%2|h[%3]|h|r")
+  text = string.gsub(text, "{CLINK:enchant:(%x+):([%d-]-):([^}]-)}",
+                     "|c%1|Henchant:%2|h[%3]|h|r")
+  text = string.gsub(text, "{CLINK:spell:(%x+):([%d-]-):([^}]-)}",
+                     "|c%1|Hspell:%2|h[%3]|h|r")
+  text = string.gsub(text,
+                     "{CLINK:quest:(%x+):([%d-]-):([%d-]-):([^}]-)}",
+                     "|c%1|Hquest:%2:%3|h[%4]|h|r")
+  return LinkifyURLs(text)
+end
+
+local function ColorPlayerLinks(text)
+  return string.gsub(text, "|Hplayer:([^|]+)|h%[([^%]]+)%]|h",
+    function(payload, display)
+      local _, _, name = string.find(payload, "^([^:]+)")
+      local class = name and U.PlayerInfo(name)
+      local r, g, b
+      if class then r, g, b = M.ClassColor(class) end
+      if not r then return "|Hplayer:" .. payload .. "|h[" .. display .. "]|h" end
+      return "|Hplayer:" .. payload .. "|h[" .. ColorCode(r, g, b) ..
+             display .. "|r]|h"
+    end)
+end
+
+local function TransformChatMessage(text, richLinks)
+  if richLinks and config.hyperlinks then text = ConvertChatLinks(text) end
+  if richLinks and config.socialColors then text = ColorPlayerLinks(text) end
+  if config.timestamps then
+    text = qol.timestampColor .. qol.timestampLeft .. date(qol.timestampFormat) ..
+           qol.timestampRight .. "|r " .. text
+  end
+  return text
+end
+
+local function RichLinksAllowed(chat)
+  if type(chat.messageTypeList) ~= "table" then return true end
+  local combat = 0
+  local _, messageType
+  for _, messageType in pairs(chat.messageTypeList) do
+    if type(messageType) == "string" and
+       (string.find(messageType, "SPELL", 1, true) or
+        string.find(messageType, "COMBAT", 1, true)) then
+      combat = combat + 1
+    end
+  end
+  return combat < 5
+end
+
+local function InstallMessageHook(chat)
+  if not chat or chat.puiChatQolAddMessage or type(chat.AddMessage) ~= "function" then
+    return
+  end
+  local original = chat.AddMessage
+  local richLinks = RichLinksAllowed(chat)
+  chat.puiChatQolAddMessage = original
+  chat.AddMessage = function(owner, text, r, g, b, id)
+    if type(text) == "string" then text = TransformChatMessage(text, richLinks) end
+    return original(owner, text, r, g, b, id)
+  end
+end
+
+local function InstallMessageHooks()
+  local count = tonumber(U.G("NUM_CHAT_WINDOWS")) or 7
+  local i
+  for i = 1, count do InstallMessageHook(U.G("ChatFrame" .. i)) end
+end
+
+local function InstallItemRefHook()
+  if qol.itemRefInstalled then return end
+  local original = U.G("SetItemRef")
+  if type(original) ~= "function" then return end
+  local wrapper = function(link, text, button)
+    if type(link) == "string" and string.sub(link, 1, 4) == "url:" then
+      local open = U.G("ChatFrame_OpenChat")
+      if type(open) == "function" then pcall(open, string.sub(link, 5)) end
+      return
+    end
+
+    local _, _, questId = string.find(link or "", "^quest:(%d+):")
+    if questId and not U.G("PandaQuest") and not U.G("pfQuest") and
+       not U.G("Questie") then
+      local _, _, title = string.find(text or "", ".*|h%[(.*)%]|h.*")
+      local tooltip = U.G("ItemRefTooltip")
+      if title and tooltip then
+        local hide = U.G("HideUIPanel")
+        local show = U.G("ShowUIPanel")
+        if type(hide) == "function" then pcall(hide, tooltip) end
+        if type(show) == "function" then pcall(show, tooltip) end
+        pcall(tooltip.SetOwner, tooltip, UIParent, "ANCHOR_PRESERVE")
+        pcall(tooltip.AddLine, tooltip, title, 1, 1, 0)
+        pcall(tooltip.AddDoubleLine, tooltip, "Quest ID", questId,
+              0.6, 0.6, 0.6, 1, 1, 1)
+        pcall(tooltip.Show, tooltip)
+        return
+      end
+    end
+    return original(link, text, button)
+  end
+  U.SetG("SetItemRef", wrapper)
+  qol.itemRefInstalled = U.G("SetItemRef") == wrapper
+end
+
+local function ChatMouseWheel()
+  local delta = tonumber(arg1) or 0
+  if delta > 0 then
+    if IsShiftKeyDown() and type(this.ScrollToTop) == "function" then
+      this:ScrollToTop()
+    elseif type(this.ScrollUp) == "function" then
+      this:ScrollUp()
+    end
+  elseif delta < 0 then
+    if IsShiftKeyDown() and type(this.ScrollToBottom) == "function" then
+      this:ScrollToBottom()
+    elseif type(this.ScrollDown) == "function" then
+      this:ScrollDown()
+    end
+  end
+end
+
+local function ApplyWheelScrolling()
+  local count = tonumber(U.G("NUM_CHAT_WINDOWS")) or 7
+  local i
+  for i = 1, count do
+    local chat = U.G("ChatFrame" .. i)
+    if chat then
+      local record = qol.wheel[i]
+      if not record then
+        record = {}
+        qol.wheel[i] = record
+        local ok, handler = pcall(chat.GetScript, chat, "OnMouseWheel")
+        if ok then record.handler = handler end
+        local enabledOk, enabled = pcall(chat.IsMouseWheelEnabled, chat)
+        if enabledOk then record.enabled = enabled and enabled ~= 0 and true or false end
+      end
+      if config.wheelScroll then
+        pcall(chat.EnableMouseWheel, chat, true)
+        pcall(chat.SetScript, chat, "OnMouseWheel", ChatMouseWheel)
+      else
+        pcall(chat.SetScript, chat, "OnMouseWheel", record.handler)
+        pcall(chat.EnableMouseWheel, chat, record.enabled and true or false)
+      end
+    end
+  end
+end
+
+local function ApplyStickyChannels()
+  local types = U.G("ChatTypeInfo")
+  if type(types) ~= "table" then return end
+  local i
+  for i = 1, table.getn(STICKY_TYPES) do
+    local key = STICKY_TYPES[i]
+    local info = types[key]
+    if type(info) == "table" then
+      if not qol.sticky[key] then qol.sticky[key] = { value = info.sticky } end
+      info.sticky = config.stickyChannels and 1 or qol.sticky[key].value
+    end
+  end
+end
+
+local function ApplyArrowHistory()
+  local edit = U.G("ChatFrameEditBox")
+  if not edit or type(edit.SetAltArrowKeyMode) ~= "function" then return end
+  if not qol.arrowCaptured then
+    qol.arrowCaptured = true
+    local ok, value = pcall(edit.GetAltArrowKeyMode, edit)
+    if ok then qol.arrowOriginal = value end
+  end
+  local value = config.arrowHistory and nil or qol.arrowOriginal
+  pcall(edit.SetAltArrowKeyMode, edit, value)
+end
+
+local function CaptureInputPosition(edit)
+  if qol.input.captured then return end
+  qol.input.captured = true
+  qol.input.points = {}
+  local okWidth, width = pcall(edit.GetWidth, edit)
+  if okWidth then qol.input.width = width end
+  local okCount, count = pcall(edit.GetNumPoints, edit)
+  count = okCount and tonumber(count) or 0
+  local i
+  for i = 1, math.min(count, 2) do
+    local ok, point, relative, relativePoint, x, y = pcall(edit.GetPoint, edit, i)
+    if ok and point then
+      qol.input.points[i] = { point, relative, relativePoint, x or 0, y or 0 }
+    end
+  end
+end
+
+local function RestoreInputPosition(edit)
+  if not qol.input.active then return end
+  pcall(edit.ClearAllPoints, edit)
+  local points = qol.input.points or {}
+  local i
+  for i = 1, table.getn(points) do
+    local point = points[i]
+    pcall(edit.SetPoint, edit, point[1], point[2], point[3], point[4], point[5])
+  end
+  if tonumber(qol.input.width) then pcall(edit.SetWidth, edit, qol.input.width) end
+  qol.input.active, qol.input.lastY = false, nil
+end
+
+local function UpdateInputPosition()
+  local edit = U.G("ChatFrameEditBox")
+  if not edit then return end
+  if not config.centerInput then RestoreInputPosition(edit) return end
+  CaptureInputPosition(edit)
+
+  local top = 0
+  local i
+  for i = 1, table.getn(INPUT_DODGE_FRAMES) do
+    local bar = U.G(INPUT_DODGE_FRAMES[i])
+    if bar and type(bar.IsVisible) == "function" and type(bar.GetTop) == "function" then
+      local visibleOk, visible = pcall(bar.IsVisible, bar)
+      if visibleOk and visible then
+        local topOk, value = pcall(bar.GetTop, bar)
+        value = topOk and tonumber(value) or nil
+        if value and value > top then top = value end
+      end
+    end
+  end
+  local y = U.Round(top + 8)
+  if qol.input.active and qol.input.lastY == y then return end
+  pcall(edit.SetWidth, edit, 300)
+  pcall(edit.ClearAllPoints, edit)
+  pcall(edit.SetPoint, edit, "BOTTOM", UIParent, "BOTTOM", 0, y)
+  qol.input.active, qol.input.lastY = true, y
+end
+
+local function ApplyOutlineText()
+  local count = tonumber(U.G("NUM_CHAT_WINDOWS")) or 7
+  local i
+  for i = 1, count do
+    local chat = U.G("ChatFrame" .. i)
+    if chat and type(chat.GetFont) == "function" then
+      local record = qol.outline[i]
+      if not record then
+        record = {}
+        qol.outline[i] = record
+        local fontOk, path, size, flags = pcall(chat.GetFont, chat)
+        if fontOk then record.path, record.size, record.flags = path, size, flags end
+        local shadowOk, x, y = pcall(chat.GetShadowOffset, chat)
+        if shadowOk then record.shadowX, record.shadowY = x, y end
+      end
+      if record.path and tonumber(record.size) then
+        if config.outlineText then
+          pcall(chat.SetFont, chat, record.path, record.size, "OUTLINE")
+          pcall(chat.SetShadowOffset, chat, 0, 0)
+        else
+          pcall(chat.SetFont, chat, record.path, record.size, record.flags)
+          if record.shadowX then
+            pcall(chat.SetShadowOffset, chat, record.shadowX, record.shadowY)
+          end
+        end
+      end
+    end
+  end
+  U.ApplyChatTextShadow()
+end
+
+local function IsBlockedNPCMessage(evt)
+  if evt ~= "CHAT_MSG_MONSTER_SAY" and evt ~= "CHAT_MSG_MONSTER_YELL" then
+    return false
+  end
+  local message, sender = arg1, arg2
+  if type(sender) == "string" and
+     (BLOCKED_NPCS[sender] or BLOCKED_NPCS[string.lower(sender)]) then
+    return true
+  end
+  if type(message) ~= "string" then return false end
+  local normalized = string.lower(string.gsub(message, "[^A-Za-z0-9]", ""))
+  if string.find(normalized, "shellcoin", 1, true) and
+     string.find(normalized, "invest", 1, true) then return true end
+  if string.find(normalized, "shells", 1, true) and
+     (string.find(normalized, "trade", 1, true) or
+      string.find(normalized, "money", 1, true)) then return true end
+  return false
+end
+
+local function IsWorldMessageInInstance(evt)
+  if evt ~= "CHAT_MSG_CHANNEL" then return false end
+  local inInstance = U.G("IsInInstance")
+  if type(inInstance) ~= "function" then return false end
+  local ok, inside = pcall(inInstance)
+  if not ok or (inside ~= 1 and inside ~= true) then return false end
+  if type(arg9) == "string" and string.lower(arg9) == "world" then return true end
+  if type(arg4) ~= "string" then return false end
+  local channel = string.lower(arg4)
+  if channel == "world" then return true end
+  local _, _, base = string.find(channel, "^%d+%.%s*(.+)$")
+  return base == "world"
+end
+
+local function InstallEventFilter()
+  if qol.filterInstalled then return end
+  local original = U.G("ChatFrame_OnEvent")
+  if type(original) ~= "function" then return end
+  local wrapper = function(evt)
+    local current = evt or event
+    if config.blockNPCSpam and IsBlockedNPCMessage(current) then return end
+    if config.hideWorldInInstances and IsWorldMessageInInstance(current) then return end
+    return original(current)
+  end
+  U.SetG("ChatFrame_OnEvent", wrapper)
+  qol.filterInstalled = U.G("ChatFrame_OnEvent") == wrapper
+end
+
+local function SocialColor(localized)
+  local token = type(U.PlayerClassToken) == "function" and
+                U.PlayerClassToken(localized) or nil
+  if token then return M.ClassColor(token) end
+  return nil
+end
+
+local function ColorWhoRows()
+  if not config.socialColors then return end
+  local frame = U.G("WhoFrame")
+  if not frame or type(frame.IsVisible) ~= "function" then return end
+  local visibleOk, visible = pcall(frame.IsVisible, frame)
+  if not visibleOk or not visible then return end
+  local scroll = U.G("WhoListScrollFrame")
+  local offset = scroll and FauxScrollFrame_GetOffset(scroll) or 0
+  local count = tonumber(U.G("WHOS_TO_DISPLAY")) or 17
+  local i
+  for i = 1, count do
+    local ok, name, _, _, _, localized = pcall(GetWhoInfo, offset + i)
+    if ok and name then
+      if type(U.PlayerCacheRemember) == "function" then
+        U.PlayerCacheRemember(name, localized)
+      end
+      local r, g, b = SocialColor(localized)
+      if r then
+        local nameText = U.G("WhoFrameButton" .. i .. "Name")
+        local classText = U.G("WhoFrameButton" .. i .. "Class")
+        if nameText then pcall(nameText.SetTextColor, nameText, r, g, b, 1) end
+        if classText then pcall(classText.SetTextColor, classText, r, g, b, 1) end
+      end
+    end
+  end
+end
+
+local function ColorGuildRows()
+  if not config.socialColors then return end
+  local frame = U.G("GuildFrame")
+  if not frame or type(frame.IsVisible) ~= "function" then return end
+  local visibleOk, visible = pcall(frame.IsVisible, frame)
+  if not visibleOk or not visible then return end
+  local scroll = U.G("GuildListScrollFrame")
+  local offset = scroll and FauxScrollFrame_GetOffset(scroll) or 0
+  local count = tonumber(U.G("GUILDMEMBERS_TO_DISPLAY")) or 13
+  local guild = type(U.PlayerGuild) == "function" and U.PlayerGuild() or nil
+  local i
+  for i = 1, count do
+    local ok, name, _, _, _, localized, _, _, _, online =
+      pcall(GetGuildRosterInfo, offset + i)
+    if ok and name then
+      if type(U.PlayerCacheRemember) == "function" then
+        U.PlayerCacheRemember(name, localized, guild)
+      end
+      local r, g, b = SocialColor(localized)
+      if r then
+        local alpha = (online and online ~= 0) and 1 or 0.5
+        local nameText = U.G("GuildFrameButton" .. i .. "Name")
+        local classText = U.G("GuildFrameButton" .. i .. "Class")
+        if nameText then pcall(nameText.SetTextColor, nameText, r, g, b, alpha) end
+        if classText then pcall(classText.SetTextColor, classText, r, g, b, alpha) end
+      end
+    end
+  end
+end
+
+local function ColorSocialRows()
+  -- FriendsFrame can load after PandaUI and its stock refresh functions repaint
+  -- these rows. The visibility guards keep this inexpensive while guaranteeing
+  -- the final visible colors without touching or replacing row handlers.
+  ColorWhoRows()
+  ColorGuildRows()
+end
+
+-- FriendsList_Update owns row text, selection and visibility. Do not hook it:
+-- this client previously crashed when addon row work followed that refresh.
+-- The shared updater calls this independently, and each named FontString is
+-- repainted only when its displayed friend or class changes. No row, handler,
+-- highlight or native text is modified.
+local function ColorFriendRows()
+  local list = U.G("FriendsListFrame")
+  if not list or type(list.IsVisible) ~= "function" then return end
+  local visibleOk, visible = pcall(list.IsVisible, list)
+  if not visibleOk or not visible then return end
+
+  local offset = 0
+  local scroll = U.G("FriendsFrameFriendsScrollFrame")
+  if scroll and type(FauxScrollFrame_GetOffset) == "function" then
+    local offsetOk, value = pcall(FauxScrollFrame_GetOffset, scroll)
+    if offsetOk then offset = tonumber(value) or 0 end
+  end
+
+  local count = tonumber(U.G("FRIENDS_TO_DISPLAY")) or 10
+  local i
+  for i = 1, count do
+    local label = U.G("FriendsFrameFriendButton" .. i ..
+                      "ButtonTextNameLocation")
+    if label then
+      local state = qol.friendRows[i]
+      if not state then
+        state = {}
+        qol.friendRows[i] = state
+        if type(label.GetTextColor) == "function" then
+          local colorOk, r, g, b, a = pcall(label.GetTextColor, label)
+          if colorOk then state.r, state.g, state.b, state.a = r, g, b, a end
+        end
+      end
+
+      local infoOk, name, _, localized, _, connected =
+        pcall(GetFriendInfo, offset + i)
+      if not infoOk then name, localized, connected = nil, nil, nil end
+      if name and (state.name ~= name or state.localized ~= localized) and
+         type(U.PlayerCacheRemember) == "function" then
+        U.PlayerCacheRemember(name, localized)
+      end
+      state.name, state.localized = name, localized
+
+      local token = name and type(U.PlayerClassToken) == "function" and
+                    U.PlayerClassToken(localized) or nil
+      if not token and name and type(U.PlayerInfo) == "function" then
+        token = U.PlayerInfo(name)
+      end
+      local enabled = config.socialColors and name and token and true or false
+      local signature = tostring(enabled) .. ":" .. tostring(name) .. ":" ..
+                        tostring(token) .. ":" .. tostring(connected)
+      if state.signature ~= signature then
+        state.signature = signature
+        if enabled then
+          local r, g, b = M.ClassColor(token)
+          if r then
+            local alpha = (connected and connected ~= 0) and 1 or 0.5
+            pcall(label.SetTextColor, label, r, g, b, alpha)
+          end
+        elseif state.r then
+          pcall(label.SetTextColor, label, state.r, state.g, state.b,
+                state.a or 1)
+        end
+      end
+    end
+  end
+end
+
+local function RememberFriends()
+  if type(U.PlayerCacheRemember) ~= "function" then return end
+  local ok, count = pcall(GetNumFriends)
+  count = ok and tonumber(count) or 0
+  local i
+  for i = 1, count do
+    local infoOk, name, _, localized = pcall(GetFriendInfo, i)
+    if infoOk and name then U.PlayerCacheRemember(name, localized) end
+  end
+end
+
+local function ApplyChatQoL()
+  UpdateTimestampFormat()
+  ApplyWheelScrolling()
+  ApplyStickyChannels()
+  ApplyArrowHistory()
+  UpdateInputPosition()
+  ApplyOutlineText()
+end
+
+local function AddCheck(parent, widgets, name, textKey, key, x, y, apply)
+  local control = U.CreateCheckbox(parent, {
+    name = name,
+    text = U.L(textKey),
+    textWidth = 205,
+    value = config[key],
+    onChange = function(value)
+      config[key] = value and true or false
+      if apply then apply() end
+    end,
   })
+  control.SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+  table.insert(widgets, control)
+  return control
+end
+
+local function BuildChatSettings(parent)
+  local widgets = {}
+  local column = U.SETTINGS_COLUMN_X or 245
+  local header = U.CreateSectionHeader(parent, {
+    text = U.L("CHAT_QOL_HEADER"), width = U.SETTINGS_PAGE_WIDTH, y = -4,
+  })
+  table.insert(widgets, header)
+
+  AddCheck(parent, widgets, "PandaUIChatWheel", "CHAT_WHEEL", "wheelScroll",
+           0, -36, ApplyWheelScrolling)
+  AddCheck(parent, widgets, "PandaUIChatSticky", "CHAT_STICKY", "stickyChannels",
+           0, -64, ApplyStickyChannels)
+  AddCheck(parent, widgets, "PandaUIChatHistory", "CHAT_ARROW_HISTORY", "arrowHistory",
+           0, -92, ApplyArrowHistory)
+  AddCheck(parent, widgets, "PandaUIChatLinks", "CHAT_HYPERLINKS", "hyperlinks",
+           0, -120)
+  AddCheck(parent, widgets, "PandaUIChatSocial", "CHAT_SOCIAL_COLORS", "socialColors",
+           column, -36, function()
+             ColorWhoRows(); ColorGuildRows(); ColorFriendRows()
+           end)
+  AddCheck(parent, widgets, "PandaUIChatNPCSpam", "CHAT_BLOCK_NPC", "blockNPCSpam",
+           column, -64)
+  AddCheck(parent, widgets, "PandaUIChatWorldHide", "CHAT_HIDE_WORLD", "hideWorldInInstances",
+           column, -92)
+  AddCheck(parent, widgets, "PandaUIChatCenterInput", "CHAT_CENTER_INPUT", "centerInput",
+           column, -120, UpdateInputPosition)
+
+  local extras = U.CreateSectionHeader(parent, {
+    text = U.L("CHAT_FORMAT_HEADER"), width = U.SETTINGS_PAGE_WIDTH, y = -166,
+  })
+  table.insert(widgets, extras)
+  AddCheck(parent, widgets, "PandaUIChatTimestamps", "CHAT_TIMESTAMPS", "timestamps",
+           0, -198)
+  AddCheck(parent, widgets, "PandaUIChat24Hour", "CHAT_24_HOUR", "timestamp24",
+           0, -226, UpdateTimestampFormat)
+  AddCheck(parent, widgets, "PandaUIChatSeconds", "CHAT_SECONDS", "timestampSeconds",
+           0, -254, UpdateTimestampFormat)
+  AddCheck(parent, widgets, "PandaUIChatOutline", "CHAT_OUTLINE", "outlineText",
+           column, -198, ApplyOutlineText)
+
+  local bracketLabel = U.CreateSettingsLabel(parent, {
+    size = M.fontSize.small, color = M.color.text, inherits = "GameFontNormalSmall",
+    justify = "LEFT", width = 205, height = 14,
+  })
+  if bracketLabel then
+    bracketLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", column, -228)
+    bracketLabel:SetText(U.L("CHAT_BRACKETS"))
+    table.insert(widgets, bracketLabel)
+  end
+  local bracket = U.CreateDropdown(parent, {
+    name = "PandaUIChatTimestampBracket", width = 205, height = 24, rowHeight = 20,
+    value = config.timestampBracket,
+    items = {
+      { value = "[]", text = U.L("CHAT_BRACKET_SQUARE") },
+      { value = "()", text = U.L("CHAT_BRACKET_ROUND") },
+      { value = "", text = U.L("CHAT_BRACKET_NONE") },
+    },
+    onChange = function(value)
+      config.timestampBracket = value
+      UpdateTimestampFormat()
+    end,
+  })
+  bracket.SetPoint("TOPLEFT", parent, "TOPLEFT", column, -246)
+  table.insert(widgets, bracket)
+
+  local color = U.CreateColorPicker(parent, {
+    name = "PandaUIChatTimestampColor", text = U.L("CHAT_TIMESTAMP_COLOR"),
+    value = { r = config.timestampR, g = config.timestampG,
+              b = config.timestampB, a = 1 },
+    hasOpacity = false,
+    onChange = function(value)
+      config.timestampR, config.timestampG, config.timestampB =
+        value.r, value.g, value.b
+      UpdateTimestampFormat()
+    end,
+  })
+  color.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -296)
+  table.insert(widgets, color)
+
+  local note = U.CreateSettingsLabel(parent, {
+    size = M.fontSize.small, color = M.color.textDim,
+    inherits = "GameFontNormalSmall", justify = "LEFT",
+    width = U.SETTINGS_PAGE_WIDTH, height = 28,
+  })
+  if note then
+    note:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -332)
+    note:SetText(U.L("CHAT_HISTORY_NOTE"))
+    table.insert(widgets, note)
+  end
+  return widgets
+end
+
+function Chat:OnInit()
+  config = U.ModuleConfig("chat", CHAT_DEFAULTS)
+  UpdateTimestampFormat()
+  if type(U.RegisterSettingsTab) == "function" then
+    U.RegisterSettingsTab("chat", U.L("CHAT_SETTINGS_PAGE"),
+                          BuildChatSettings, { after = "general" })
+  end
   if config and config.resized then
     lastSavedWidth = tonumber(config.width)
     lastSavedHeight = tonumber(config.height)
@@ -621,7 +1324,20 @@ function Chat:OnEnable()
   end
 
   CreateGrip()
-  U.ApplyChatTextShadow()
+  InstallMessageHooks()
+  InstallItemRefHook()
+  InstallEventFilter()
+  ApplyChatQoL()
+  U.PostHookGlobal("UIParent_ManageFramePositions", UpdateInputPosition)
+  U.PostHookGlobal("WhoList_Update", ColorWhoRows)
+  U.PostHookGlobal("GuildStatus_Update", ColorGuildRows)
+  U.RegisterUpdate("chat.social-rows", 0.25, ColorSocialRows)
+  U.RegisterEvent("FRIENDLIST_UPDATE", RememberFriends)
+  RememberFriends()
+  U.RegisterUpdate("chat.social-friends", 0.5, ColorFriendRows)
+  ColorFriendRows()
+  U.RegisterUpdate(CENTER_INPUT_UPDATE_ID, CENTER_INPUT_INTERVAL,
+                   UpdateInputPosition)
   RestoreSavedGeometry()
   restorePasses = config and config.resized and RESTORE_PASSES or 0
   positionWasUnlocked = not ChatIsLocked()

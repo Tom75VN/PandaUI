@@ -573,6 +573,8 @@ function U.CreateSearchBox(parent, options)
     if SB.active == box then SB.End() end
     SB.SetText(box, "", true)
   end)
+  -- options.noIcon: a plain text field (a name or an id) rather than a search.
+  if options.noIcon then box.submit:Hide() end
 
   -- A field that goes away takes typing mode with it.
   box:SetScript("OnHide", function()
@@ -607,6 +609,11 @@ end
 -- Redraws the field; its owner calls it after a resize.
 function U.PaintSearchBox(box)
   SB.Paint(box)
+end
+
+-- Shows `text` without calling onChange: the owner is loading a value.
+function U.SetSearchBoxText(box, text)
+  SB.SetText(box, string.sub(tostring(text or ""), 1, SB.MAX_LETTERS), false)
 end
 
 -- Leaves typing mode and empties the field without calling its onChange: the

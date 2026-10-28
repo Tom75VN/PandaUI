@@ -5,9 +5,10 @@
 -- mode.
 --
 -- The map surface and its behavior stay native. Modern gives it a square mask
--- and the flat PandaUI panel treatment. Modern WoW, or Classic's explicit
--- Minimap selection, replaces the stock chrome with its authored round-map
--- textures. The pending-mail letter is not part of either path: it is
+-- and the flat PandaUI panel treatment. Modern WoW can use its authored round
+-- map or DragonflightUI's square frame with Retail's square mask; Classic's
+-- explicit Minimap selection keeps the round map. The pending-mail letter is
+-- not part of either path: it is
 -- pandaUI's animated flipbook under every theme (see "The pending-mail letter"
 -- below). knowledge.json /
 -- minimap.render_pass_under_ordinary_frames says the map surface is drawn in a
@@ -40,6 +41,7 @@ local POSITION_ID = "minimapbutton"
 
 local modernFlatMinimap = { dressed = false }
 local modernWowMinimap = { dressed = false }
+local SHAPE_DEFAULTS = { modernWowShape = "circle" }
 
 local function ModernWow()
   return type(U.ModernWowModuleEnabled) == "function" and
@@ -50,6 +52,22 @@ end
 local function ModernFlat()
   return U.GetActiveThemeStyle() == "modern"
 end
+
+local function ModernWowTheme()
+  return U.GetActiveThemeStyle() == "modern-wow"
+end
+
+local function ModernWowShape()
+  local cfg = U.ModuleConfig("minimap", SHAPE_DEFAULTS)
+  if cfg.modernWowShape == "square" then return "square" end
+  return "circle"
+end
+
+local function SquareMinimap()
+  return ModernFlat() or (ModernWowTheme() and ModernWowShape() == "square")
+end
+
+U.MinimapIsSquare = SquareMinimap
 
 -- The stock minimap ring on this client is not one dependable region:
 -- knowledge.json / minimap.native_chrome_requires_targeted_suppression and the
@@ -220,6 +238,85 @@ local function RestoreRoundMinimapMask()
   return true
 end
 
+local function SetRegionVisible(region, visible)
+  if not region then return end
+  if visible then pcall(region.Show, region) else pcall(region.Hide, region) end
+end
+
+local function PlaceModernWowZoomButtons(square)
+  local minimap = U.G("Minimap")
+  local zoomIn = U.G("MinimapZoomIn")
+  local zoomOut = U.G("MinimapZoomOut")
+  local layout = M.modernWow and M.modernWow.minimap
+  if not minimap or not layout then return end
+
+  if zoomIn then pcall(zoomIn.ClearAllPoints, zoomIn) end
+  if zoomOut then pcall(zoomOut.ClearAllPoints, zoomOut) end
+
+  if square then
+    local rightInset = layout.squareZoomRightInset / layout.zoomScale
+    local bottomGap = layout.squareZoomBottomGap / layout.zoomScale
+    local gap = layout.squareZoomGap / layout.zoomScale
+    if zoomIn then
+      pcall(zoomIn.SetPoint, zoomIn, "TOPRIGHT", minimap, "BOTTOMRIGHT",
+        -rightInset, -bottomGap)
+    end
+    if zoomOut then
+      if zoomIn then
+        pcall(zoomOut.SetPoint, zoomOut, "TOPRIGHT", zoomIn, "TOPLEFT",
+          -gap, 0)
+      else
+        pcall(zoomOut.SetPoint, zoomOut, "TOPRIGHT", minimap, "BOTTOMRIGHT",
+          -rightInset, -bottomGap)
+      end
+    end
+    return
+  end
+
+  if zoomIn then
+    pcall(zoomIn.SetPoint, zoomIn, "TOPLEFT", minimap, "BOTTOMRIGHT",
+      layout.zoomX, layout.zoomY)
+  end
+  if zoomOut then
+    if zoomIn then
+      pcall(zoomOut.SetPoint, zoomOut, "TOPRIGHT", zoomIn, "BOTTOMLEFT", 0, 0)
+    else
+      pcall(zoomOut.SetPoint, zoomOut, "TOPLEFT", minimap, "BOTTOMRIGHT",
+        layout.zoomX, layout.zoomY - 42.6)
+    end
+  end
+end
+
+local function ApplyModernWowShape()
+  if not modernWowMinimap.dressed then return false end
+  local minimap = U.G("Minimap")
+  local art = M.modernWow and M.modernWow.texture
+  if not minimap or not art or type(minimap.SetMaskTexture) ~= "function" then
+    return false
+  end
+
+  local square = ModernWowTheme() and ModernWowShape() == "square"
+  local mask = square and art.minimapSquareMask or M.minimapRoundMask
+  if not mask or not pcall(minimap.SetMaskTexture, minimap, mask) then
+    U.Debug("modern-wow minimap: shape mask failed")
+    return false
+  end
+
+  SetRegionVisible(modernWowMinimap.border, not square)
+  SetRegionVisible(modernWowMinimap.shadow, not square)
+  SetRegionVisible(modernWowMinimap.squareBorder, square)
+  PlaceModernWowZoomButtons(square)
+  modernWowMinimap.square = square
+
+  if type(U.RefreshMinimapShapeGeometry) == "function" then
+    U.RefreshMinimapShapeGeometry()
+  end
+  U.Debug("modern-wow minimap shape applied: " .. (square and "square" or "circle"))
+  return true
+end
+
+U.ApplyMinimapShape = ApplyModernWowShape
+
 -- Complete modern-wow drawing path. The imported layout is working-source
 -- evidence from DragonflightUI-Reforged; every client-owned object remains
 -- capability-checked because only MinimapZoomIn is named in official client
@@ -254,6 +351,18 @@ local function DressModernWowMinimap()
   local width = 140
   local ok, liveWidth = pcall(minimap.GetWidth, minimap)
   if ok and type(liveWidth) == "number" and liveWidth > 0 then width = liveWidth end
+
+  local squareBorder = minimap:CreateTexture(
+    "PandaUIModernWowMinimapSquareBorder", "ARTWORK")
+  squareBorder:SetTexture(art.minimapSquareFrame)
+  squareBorder:SetPoint("TOPLEFT", minimap, "TOPLEFT",
+                        -layout.squareBorderOffset,
+                        layout.squareBorderOffset + layout.squareBorderYOffset)
+  squareBorder:SetPoint("BOTTOMRIGHT", minimap, "BOTTOMRIGHT",
+                        layout.squareBorderOffset,
+                        -layout.squareBorderOffset + layout.squareBorderYOffset)
+  squareBorder:Hide()
+
   panel:SetWidth(width)
   panel:SetHeight(layout.topPanelHeight)
   panel:SetPoint("BOTTOM", minimap, "TOP", 0, layout.topPanelGap)
@@ -344,7 +453,9 @@ local function DressModernWowMinimap()
   modernWowMinimap.dressed = true
   modernWowMinimap.border = border
   modernWowMinimap.shadow = shadow
+  modernWowMinimap.squareBorder = squareBorder
   modernWowMinimap.topPanel = panel
+  ApplyModernWowShape()
   U.Debug("modern-wow minimap chrome applied")
   return true
 end
@@ -546,7 +657,7 @@ function ring.Place(frame, angle)
   if ok and type(liveWidth) == "number" and liveWidth > 0 then width = liveWidth end
   local x, y = cos(angle), sin(angle)
   local radius = width / 2 + RING_OUTSET
-  if ModernFlat() then
+  if SquareMinimap() then
     local edge = math.max(math.abs(x), math.abs(y))
     if edge > 0 then radius = radius / edge end
   end
@@ -696,6 +807,57 @@ function ring.ApplySaved()
   end
 end
 
+function ring.FrameAngle(frame)
+  local minimap, atan2 = U.G("Minimap"), U.G("atan2")
+  if not frame or not minimap or type(atan2) ~= "function" then return nil end
+  local ownOk, x, y = pcall(frame.GetCenter, frame)
+  local mapOk, mapX, mapY = pcall(minimap.GetCenter, minimap)
+  local ownScaleOk, ownScale = pcall(frame.GetEffectiveScale, frame)
+  local mapScaleOk, mapScale = pcall(minimap.GetEffectiveScale, minimap)
+  if not ownOk or not mapOk or not ownScaleOk or not mapScaleOk or
+     type(x) ~= "number" or type(y) ~= "number" or
+     type(mapX) ~= "number" or type(mapY) ~= "number" or
+     type(ownScale) ~= "number" or type(mapScale) ~= "number" then
+    return nil
+  end
+  return math.mod(atan2(y * ownScale - mapY * mapScale,
+                        x * ownScale - mapX * mapScale) + 360, 360)
+end
+
+function ring.Reflow()
+  local angles = ring.Angles()
+  local i
+  for i = 1, table.getn(RING_ICONS) do
+    local name = RING_ICONS[i]
+    if ring.hooked[name] and not (group.saved and group.saved[name]) then
+      local frame = U.G(name)
+      local angle = tonumber(angles[name]) or ring.FrameAngle(frame)
+      if angle then ring.Place(frame, angle) end
+    end
+  end
+end
+
+function ring.RestoreCircle()
+  local angles = ring.Angles()
+  local i
+  for i = 1, table.getn(RING_ICONS) do
+    local name = RING_ICONS[i]
+    if ring.hooked[name] and not (group.saved and group.saved[name]) then
+      local frame = U.G(name)
+      local angle = tonumber(angles[name])
+      if angle then
+        ring.Place(frame, angle)
+      else
+        ring.SetPoints(frame, ring.original[name])
+      end
+    end
+  end
+end
+
+function ring.ApplyShape()
+  if SquareMinimap() then ring.Reflow() else ring.RestoreCircle() end
+end
+
 function ring.Reset()
   local angles = ring.Angles()
   local i
@@ -718,10 +880,10 @@ function ring.Setup()
     local frame = U.G(RING_ICONS[i])
     if frame and ring.Hook(frame) then hooked = hooked + 1 end
   end
-  ring.ApplySaved()
+  ring.ApplyShape()
   -- The client can re-apply a user-placed spot from its layout cache after
   -- login, so the saved angles are asserted again on entering the world.
-  U.RegisterEvent("PLAYER_ENTERING_WORLD", ring.ApplySaved)
+  U.RegisterEvent("PLAYER_ENTERING_WORLD", ring.ApplyShape)
   U.OnPositionReset(ring.Reset)
   U.Debug("minimap ring: " .. hooked .. " icons draggable around the minimap")
 end
@@ -1033,6 +1195,14 @@ function group.Apply()
 end
 U.ApplyMinimapGroup = function() group.Apply() end
 
+function U.RefreshMinimapShapeGeometry()
+  group.Apply()
+  ring.ApplyShape()
+  if type(U.ApplyMinimapArrowShape) == "function" then
+    U.ApplyMinimapArrowShape()
+  end
+end
+
 -- For the settings page: { name, label } per candidate, scanned fresh.
 function U.MinimapGroupCandidates()
   group.Scan()
@@ -1227,7 +1397,7 @@ local function CursorOffset(minimap)
 
   local offsetX = cursorX / scale - centerX
   local offsetY = cursorY / scale - centerY
-  if ModernFlat() then
+  if SquareMinimap() then
     local heightOk, height = pcall(minimap.GetHeight, minimap)
     if not heightOk or type(height) ~= "number" or height <= 0 then height = width end
     if math.abs(offsetX) > width / 2 or math.abs(offsetY) > height / 2 then return nil end
@@ -1316,6 +1486,41 @@ local function BuildSettingsPage(parent)
   })
   table.insert(widgets, header)
 
+  local shape
+  local shapeShift = 0
+  if ModernWowTheme() then
+    local shapeLabel = U.CreateSettingsLabel(parent, {
+      size = M.fontSize.small,
+      color = M.color.text,
+      inherits = "GameFontNormalSmall",
+      justify = "LEFT",
+    })
+    if shapeLabel then
+      shapeLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -34)
+      shapeLabel:SetText(U.L("SETTINGS_MINIMAP_SHAPE"))
+      table.insert(widgets, shapeLabel)
+    end
+
+    shape = U.CreateDropdown(parent, {
+      name = "PandaUISettingsMinimapShape",
+      value = ModernWowShape(),
+      width = 220,
+      height = 24,
+      rowHeight = 20,
+      items = {
+        { value = "circle", text = U.L("SETTINGS_MINIMAP_SHAPE_CIRCLE") },
+        { value = "square", text = U.L("SETTINGS_MINIMAP_SHAPE_SQUARE") },
+      },
+      onChange = function(value)
+        U.ModuleConfig("minimap", SHAPE_DEFAULTS).modernWowShape = value
+        ApplyModernWowShape()
+      end,
+    })
+    shape.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -51)
+    table.insert(widgets, shape)
+    shapeShift = 62
+  end
+
   local enable = U.CreateCheckbox(parent, {
     name = "PandaUISettingsMinimapGroup",
     text = U.L("SETTINGS_MINIMAP_GROUP"),
@@ -1325,7 +1530,7 @@ local function BuildSettingsPage(parent)
       group.Apply()
     end,
   })
-  enable.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -34)
+  enable.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -34 - shapeShift)
   table.insert(widgets, enable)
 
   local hint = U.CreateSettingsLabel(parent, {
@@ -1344,7 +1549,7 @@ local function BuildSettingsPage(parent)
   local listHeader = U.CreateSectionHeader(parent, {
     text = U.L("SETTINGS_MINIMAP_GROUP_ICONS"),
     width = pageWidth,
-    y = -110,
+    y = -110 - shapeShift,
   })
   table.insert(widgets, listHeader)
 
@@ -1378,6 +1583,7 @@ local function BuildSettingsPage(parent)
 
   local function Refresh()
     local cfg = group.Config()
+    if shape then shape.SetValue(ModernWowShape(), false) end
     enable.SetValue(cfg.groupIcons and true or false)
     local n
     for n = 1, table.getn(controls) do

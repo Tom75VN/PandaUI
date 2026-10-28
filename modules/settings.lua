@@ -1209,6 +1209,12 @@ local function LayoutIntegratedCanvas()
   SetIntegratedOffset(integrated.offset)
 end
 
+-- Remeasures the scroll range, keeping the offset, for a page whose own
+-- content just grew or shrank.
+function U.RelayoutIntegratedSettings()
+  if integrated.canvas then LayoutIntegratedCanvas() end
+end
+
 -- The height a page built into this canvas can use before it scrolls. nil
 -- until the canvas has been laid out once, which callers read as "no answer
 -- yet" rather than as a height.

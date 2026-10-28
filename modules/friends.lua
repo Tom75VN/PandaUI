@@ -431,9 +431,10 @@ end
 
 -- A Social list's native track art: two textures on the scroll frame itself
 -- (Interface/PaperDollInfoFrame/UI-Character-ScrollBar, a 31x256 top and a
--- 31x106 bottom cap, BACKGROUND). RUNTIME_PROBE 2026-09-19 (/urp interface
--- WhoListScrollFrame): a walked one returns NO GetTexture(); its GetName() is
--- the path plus an address, so it is matched by name, and split by height.
+-- 31x106 bottom cap, BACKGROUND). FOCUSED_RUNTIME_PROBE socialscroll.v1 on
+-- this client returns nil names for both Friends textures, so they are found
+-- by their exact 31x256 / 31x106 geometry; a texture-path name remains the
+-- preferred match where another list exposes it. They are split by height.
 -- They hang off the scroll frame, not the bar, so they do not follow a moved
 -- bar or a footer/header band. A walked region has no reliable writers
 -- (knowledge.json widgets.region_walk_wrapper_lacks_setters): each is moved
@@ -459,7 +460,7 @@ local function PlaceTrackPiece(scroll, region, spec, y, anchor)
       piece:SetPoint(spec.point, scroll, spec.relative, spec.x, y)
     end
   end
-  local real = U.G(region.name)
+  local real = region.name and U.G(region.name)
   if type(real) == "table" and type(real.SetPoint) == "function" and
      pcall(Anchor, real) then
     return real
@@ -489,9 +490,18 @@ local function FindTrackPieces(scroll)
     if region then
       local okN, name = pcall(region.GetName, region)
       local okH, height = pcall(region.GetHeight, region)
-      if okN and type(name) == "string" and
-         string.find(string.lower(name), "ui%-character%-scrollbar") and
-         okH and tonumber(height) then
+      local okW, width = pcall(region.GetWidth, region)
+      local okT, objectType = pcall(region.GetObjectType, region)
+      height = okH and tonumber(height) or nil
+      width = okW and tonumber(width) or nil
+      local named = okN and type(name) == "string" and
+                    string.find(string.lower(name),
+                                "ui%-character%-scrollbar")
+      local shaped = okT and objectType == "Texture" and width and height and
+                     math.abs(width - 31) < 0.1 and
+                     (math.abs(height - 106) < 0.1 or
+                      math.abs(height - 256) < 0.1)
+      if (named or shaped) and height then
         found[height < 200 and "bottom" or "top"] = { object = region, name = name }
       end
     end
@@ -510,6 +520,15 @@ end
 -- takes no mouse input (rules/pandaui-design.md layering).
 -- The plate is up on every tab; on the Who tab its top reaches `whoGrow`
 -- higher. Only the anchors change, so nothing is read back from the plate.
+local function RefreshFooterPlateSkin()
+  if not modernWow then return end
+  local plate = panel and panel.puiSocialFooterPlate
+  if not plate then return end
+  -- Modern WoW keeps the metal divider but never paints the footer-rock wash
+  -- on any Social view. Other themes never build this plate.
+  U.ModernWowSocialFooterPlate(plate, nil, true)
+end
+
 local function PlaceFooterPlate()
   local plate = panel and panel.puiSocialFooterPlate
   if not plate or not plate.puiFirst or not plate.puiLast then return end
@@ -615,7 +634,7 @@ local function FooterPlate(first, last)
 
   plate.puiFirst, plate.puiLast = first, last
   PlaceFooterPlate()
-  U.ModernWowSocialFooterPlate(plate)
+  RefreshFooterPlateSkin()
   pcall(plate.Show, plate)
 
   -- The friend list's scroll channel runs down to the footer's top edge, so
@@ -697,35 +716,46 @@ local function FooterPlate(first, last)
     local list = G("FriendsFrameFriendsScrollFrame")
     if native and native.bar and list then
       topDrop, bottomDrop = sb.friendsThumbTop or 0, sb.friendsThumbBottom or 0
+      local barX = native.bar.x + (sb.friendsBarX or 0)
+      local barY = sb.friendsBarY or 0
       pcall(function()
         bar:ClearAllPoints()
-        bar:SetPoint("TOPLEFT", list, "TOPRIGHT", native.bar.x,
-                     native.bar.top - topDrop)
-        bar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", native.bar.x,
-                     native.bar.bottom - bottomDrop)
+        bar:SetPoint("TOPLEFT", list, "TOPRIGHT", barX,
+                     native.bar.top - topDrop - barY)
+        bar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", barX,
+                     native.bar.bottom - bottomDrop - barY)
       end)
       local okLB, listBottom = pcall(list.GetBottom, list)
       if okLB and tonumber(listBottom) then
-        barBottom = listBottom + native.bar.bottom - bottomDrop
+        barBottom = listBottom + native.bar.bottom - bottomDrop - barY
       end
       local down = G("FriendsFrameFriendsScrollFrameScrollBarScrollDownButton")
       if down and native.down then
-        -- Rides the bottom edge's drop, then `friendsDownY` more in total.
+        -- Ride the Slider's bottom edge. Do not add `bottomDrop` back here:
+        -- that cancelled extent changes and left the arrow behind while the
+        -- background and thumb moved (user screenshots, 2026-10-28).
         pcall(function()
+          local arrowSize = sb.friendsArrowSize or 16
+          down:SetWidth(arrowSize)
+          down:SetHeight(arrowSize)
           down:ClearAllPoints()
           down:SetPoint("TOP", bar, "BOTTOM", native.down.x,
-                        native.down.y + bottomDrop - (sb.friendsDownY or 0))
+                        native.down.y - (sb.friendsDownY or 0))
         end)
       end
     end
 
-    -- The up arrow alone sits `friendsUpY` higher (user, 2026-09-20),
-    -- measured from its native place, not from the lowered top edge.
+    -- The up arrow rides the Slider's top edge, then sits `friendsUpY`
+    -- higher. Adding `topDrop` back would leave it behind when the top extent
+    -- changes, instead of keeping it inside the moved background.
     if up and native then
       pcall(function()
+        local arrowSize = sb.friendsArrowSize or 16
+        up:SetWidth(arrowSize)
+        up:SetHeight(arrowSize)
         up:ClearAllPoints()
         up:SetPoint("BOTTOM", bar, "TOP", native.x,
-                    native.y + topDrop + (sb.friendsUpY or 0))
+                    native.y + (sb.friendsUpY or 0))
       end)
     end
 
@@ -743,20 +773,29 @@ local function FooterPlate(first, last)
                    (M.modernWow.social.scrollBed.friendsBedBottomY or 0))
     end)
 
-    -- The list's native track bottom cap hung below the down arrow into the
-    -- footer (user report 2026-09-20): it now ends just above the plate's
-    -- rule, which is centred on the plate's top edge. Once, on success.
+    -- The native track textures live on the scroll frame, not the Slider, so
+    -- moving only `bar` leaves most of the visible scrollbar stationary.
+    -- Attach both pieces to the Slider once; every X/Y adjustment above then
+    -- moves the complete assembly (user confirmation, 2026-10-28).
     local list = G("FriendsFrameFriendsScrollFrame")
-    if list and not list.puiTrackCapPlaced then
-      local okB, listBottom = pcall(list.GetBottom, list)
-      listBottom = okB and tonumber(listBottom)
-      local found = listBottom and FindTrackPieces(list) or {}
+    if list and native and native.bar and not list.puiFriendsTrackPlaced then
+      local found = FindTrackPieces(list)
+      local x = TRACK.top.x - native.bar.x
+      local top, bottom
+      if found.top then
+        top = PlaceTrackPiece(list, found.top, TRACK.top,
+                              5 - native.bar.top +
+                              (sb.friendsTrackTopY or 0),
+                              { frame = bar, point = "TOPLEFT", x = x })
+      end
       if found.bottom then
-        local ruleHalf = M.modernWow.social.headerPlate.ruleHalf
-        if PlaceTrackPiece(list, found.bottom, TRACK.bottom,
-                           plateTop + ruleHalf - listBottom) then
-          list.puiTrackCapPlaced = true
-        end
+        bottom = PlaceTrackPiece(list, found.bottom, TRACK.bottom,
+                                 TRACK.bottom.y - native.bar.bottom +
+                                 (sb.friendsTrackBottomY or 0),
+                                 { frame = bar, point = "BOTTOMLEFT", x = x })
+      end
+      if top and bottom then
+        list.puiFriendsTrackPlaced = true
       end
     end
   end)
@@ -1001,6 +1040,15 @@ local function StyleFriendsSubTab()
   if modernWow then
     local downY = M.modernWow.social.scrollBed.friendsDownY or 0
     leftY, rightY = -downY / 2, downY - downY / 2
+    -- The right column hangs from the down arrow. That arrow now follows the
+    -- Slider's bottom extent, so cancel the extent here and keep both footer
+    -- columns at their established vertical position.
+    rightY = rightY +
+             (M.modernWow.social.scrollBed.friendsThumbBottom or 0)
+    -- Close the remaining visual offset evenly: left column down, right
+    -- column up, so their two rows share the same baselines.
+    local joinY = M.modernWow.social.footerButton.joinY or 0
+    leftY, rightY = leftY - joinY, rightY + joinY
     -- Both columns then sit `raise` higher (user, 2026-09-20); the footer
     -- plate, which hangs off these buttons, takes the same amount back in
     -- PlaceFooterPlate so it stays where it is on every tab.
@@ -1679,8 +1727,9 @@ local function HeaderBand(scroll, host, name, headerName, bottomScroll)
       height, bottomY = h, listTop
     end)
   end
-  -- Built once; later calls only re-sample the rock grain for the live size.
-  U.ModernWowSocialFooterPlate(plate, "BOTTOM")
+  -- Who and Guild keep the divider without the footer-rock wash behind their
+  -- headings, matching the untinted content area below them.
+  U.ModernWowSocialFooterPlate(plate, "BOTTOM", true)
   return plate, height, bottomY
 end
 
@@ -2015,20 +2064,32 @@ local function GuildHeaderPlate()
     end)
   end
 
-  -- "Show Offline Members" (checkbox + label, both inside GuildFrameLFGFrame)
-  -- sits `offlineDrop` lower (user, 2026-09-20): the container is re-anchored
-  -- once from its own measured offset against the shown Guild frame.
+  -- "Show Offline Members" and GuildFrameSearchBox share the client's
+  -- GuildFrameLFGFrame. Move that container right for the checkbox, but pin
+  -- the search box back to its measured Guild-frame position so the two
+  -- controls occupy opposite ends of the header (user, 2026-10-28).
   local lfg, guild = G("GuildFrameLFGFrame"), G("GuildFrame")
+  local search = G("GuildFrameSearchBox")
   local offlineDrop = M.modernWow.social.guildButtons.offlineDrop or 0
-  if lfg and guild and offlineDrop ~= 0 and not lfg.puiOfflineDropped then
+  local offlineRight = M.modernWow.social.guildButtons.offlineRight or 0
+  if lfg and guild and not lfg.puiOfflinePlaced then
     pcall(function()
-      local top, left = lfg:GetTop(), lfg:GetLeft()
+      local top = lfg:GetTop()
       local gTop, gLeft = guild:GetTop(), guild:GetLeft()
-      if top and left and gTop and gLeft then
-        lfg.puiOfflineDropped = true
+      local searchTop, searchLeft
+      if search then
+        searchTop, searchLeft = search:GetTop(), search:GetLeft()
+      end
+      if top and gTop then
+        lfg.puiOfflinePlaced = true
         lfg:ClearAllPoints()
-        lfg:SetPoint("TOPLEFT", guild, "TOPLEFT", left - gLeft,
+        lfg:SetPoint("TOPRIGHT", guild, "TOPRIGHT", -offlineRight,
                      top - gTop - offlineDrop)
+        if searchTop and searchLeft and gLeft then
+          search:ClearAllPoints()
+          search:SetPoint("TOPLEFT", guild, "TOPLEFT", searchLeft - gLeft,
+                          searchTop - gTop - offlineDrop)
+        end
       end
     end)
   end
@@ -2867,15 +2928,18 @@ local function BuildFrame()
   -- REVERTED, USER_CONFIRMED_INGAME (crash): the FriendsList_Update post-hook
   -- also used to re-style FriendsFrameFriendButton row highlights, deferred by
   -- one tick (see DeferOnce above). That still crashed the client, this time
-  -- merely on selecting a row, not just on remove. Friend rows are now left
-  -- fully native (see StyleFriendsSubTab/StyleIgnoreSubTab); there is nothing
-  -- left for this hook to do. See knowledge.json
+  -- merely on selecting a row, not just on remove. No row styling runs from
+  -- this hook; chat's optional class colour uses independent guarded polling
+  -- and touches only the named caption FontString. See knowledge.json
   -- frames.friendsframe_row_touch_crashes_client.
 
   -- Every tab switch runs FriendsFrame_Update; the plate follows a tick later,
   -- outside the native switch (see the scroll-bed note in modernwow.lua).
   U.PostHookGlobal("FriendsFrame_Update", function()
-    DeferOnce("footer-plate-tab", PlaceFooterPlate)
+    DeferOnce("footer-plate-tab", function()
+      PlaceFooterPlate()
+      RefreshFooterPlateSkin()
+    end)
   end)
 
   -- The client rewrites the window title on every tab change -- Friends, Who,

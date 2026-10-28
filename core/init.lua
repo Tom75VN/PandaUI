@@ -9,7 +9,7 @@ PandaUI = {}
 local U = PandaUI
 
 U.name      = "pandaUI"
-U.version   = "0.12.2"
+U.version   = "0.13.0"
 U.modules   = {}       -- name -> module table
 U.moduleOrder = {}     -- load/enable order, registration order
 U.ready     = false    -- set once PLAYER_LOGIN work has run

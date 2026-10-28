@@ -23,6 +23,19 @@ SOFTWARE.
 
 
 ================================================================================
+SHAGUTWEAKS-INSPIRED CHAT FEATURES
+================================================================================
+
+The chat quality-of-life logic in modules/chat.lua includes code adapted from
+ShaguTweaks and ShaguTweaks Extras, including URL patterns and NPC spam rules.
+
+Copyright (c) 2021 Eric Mauser (Shagu)
+Copyright (c) 2022 GryllsAddons
+
+These portions are distributed under the MIT License above.
+
+
+================================================================================
 BUNDLED PANDAQUEST QUEST-MARK ARTWORK
 ================================================================================
 
@@ -58,3 +71,16 @@ third-party FLATPLAYERICONS pack (a UI-Classes-Circles replacement). The pack
 names no author and includes no license text. These files retain their original
 ownership and are not represented as original pandaUI artwork by the MIT
 license above. See media/Textures/class-icons/ATTRIBUTION.md.
+
+
+================================================================================
+BUNDLED DRAGONFLIGHTUI SQUARE MINIMAP ARTWORK
+================================================================================
+
+media/Textures/modern-wow/minimap/square-frame.tga is converted losslessly
+from WoW-DragonflightUI's Textures/MinimapSquareJag.png.
+
+Copyright (c) 2022 Karl-HeinzSchneider
+
+This file is distributed under the MIT License above. See
+media/Textures/modern-wow/ATTRIBUTION.md.

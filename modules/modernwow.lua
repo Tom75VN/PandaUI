@@ -2251,6 +2251,17 @@ function mw.BuildHousing(frame, entry)
                        - (tonumber(L.levelReserve) or
                           tonumber(M.modernWow.text.levelReserve) or 0)
 
+    -- Make the calculated budget the label's real width and keep player names
+    -- on one line. Without an explicit width this client's inherited font
+    -- object can retain a narrow wrap width, which split even short party
+    -- names across two rows. FitName temporarily widens it while measuring.
+    if name and nameBudget > 0 then
+      pcall(name.SetWidth, name, nameBudget)
+      if name.SetNonSpaceWrap then
+        pcall(name.SetNonSpaceWrap, name, false)
+      end
+    end
+
     -- ringTint rides on the header so mw.ApplyHeaderInk can switch the row
     -- between its two colour modes before frame.puiModernWow exists.
     frame.puiModernWowHeaderText = { name = name, level = levelText,
@@ -2490,10 +2501,14 @@ function mw.FitName(text, value)
     return value
   end
 
+  -- GetStringWidth reports the laid-out line, so measure with a width wider
+  -- than any unit-frame name before restoring the real one-line budget.
+  pcall(text.name.SetWidth, text.name, 512)
   text.name:SetText(value)
   local ok, width = pcall(text.name.GetStringWidth, text.name)
   width = ok and tonumber(width) or nil
   if not width then
+    pcall(text.name.SetWidth, text.name, budget)
     if string.len(value) > 12 then return string.sub(value, 1, 12) end
     return value
   end
@@ -2507,6 +2522,7 @@ function mw.FitName(text, value)
     ok, width = pcall(text.name.GetStringWidth, text.name)
     width = ok and tonumber(width) or budget
   end
+  pcall(text.name.SetWidth, text.name, budget)
   return trimmed
 end
 
@@ -6210,32 +6226,11 @@ function mw.SocialFooterGrain(plate, wash)
   pcall(wash.SetTexCoord, wash, 0, width / token.atlas, 0, height / token.atlas)
 end
 
--- `edge` is where the metal rule runs: "TOP" (default, the footer: rule
--- between list and actions) or "BOTTOM" (the Who header: rule between the
--- header and the list below it).
-function U.ModernWowSocialFooterPlate(plate, edge)
-  if not U.ModernWowSocialActive() or not plate then return false end
-  local bottom = edge == "BOTTOM"
-  local token = M.modernWow.social.footerPlate
-  if plate.puiSocialFooterPlate then
-    -- Already built: only re-sample the grain, in case the run resized.
-    if plate.puiSocialFooterWash then
-      mw.SocialFooterGrain(plate, plate.puiSocialFooterWash)
-    end
-    if plate.puiSocialFooterRule then
-      pcall(plate.puiSocialFooterRule.SetWidth,
-            plate.puiSocialFooterRule, mw.Dimension(plate, "GetWidth"))
-    end
-    return true
-  end
-  if not token then return false end
-
-  -- ARTWORK, not BACKGROUND: RUNTIME_PROBE 2026-09-19 measured this region as
-  -- 322x65, two anchors, shown, on a visible level-2 frame whose OVERLAY rule
-  -- drew correctly -- and it still rendered nothing on BACKGROUND.
+local function SocialFooterWash(plate, token)
+  if plate.puiSocialFooterWash then return plate.puiSocialFooterWash end
   local rock = M.modernWow.texture.questFooter
   local wash = mw.Texture(plate, "ARTWORK", rock)
-  if not wash then return false end
+  if not wash then return nil end
   -- Anchored corner to corner rather than with SetAllPoints: the wash drew
   -- nothing while the rule on the same frame drew correctly
   -- (USER_CONFIRMED_INGAME 2026-09-19, with every region forced opaque), so
@@ -6247,12 +6242,76 @@ function U.ModernWowSocialFooterPlate(plate, edge)
   end)
   U.SetColor(wash, token.shade, token.shade, token.shade, 1)
   plate.puiSocialFooterWash = wash
-  mw.SocialFooterGrain(plate, wash)
+  return wash
+end
+
+-- `edge` is where the metal rule runs: "TOP" (default, the footer: rule
+-- between list and actions) or "BOTTOM" (the Who header: rule between the
+-- header and the list below it). `noWash` keeps that rule without painting
+-- the footer-rock background behind the header.
+function U.ModernWowSocialFooterPlate(plate, edge, noWash)
+  if not U.ModernWowSocialActive() or not plate then return false end
+  local bottom = edge == "BOTTOM"
+  local token = M.modernWow.social.footerPlate
+  -- Every Social divider spans the Retail housing's inset, rather than
+  -- inheriting the narrower header/button plate or the housing's outer width.
+  -- Its margins place the side borders; their edge thickness is excluded too.
+  local housing = M.modernWow.characterWindow
+  local ruleWidth = housing and tonumber(housing.width)
+  local ruleX = 0
+  local inset = housing and housing.inset
+  local insetLeft = inset and tonumber(inset.left)
+  local insetRight = inset and tonumber(inset.right)
+  local borderEdge = housing and housing.insetBorder and
+                     tonumber(housing.insetBorder.edge)
+  if ruleWidth and insetLeft and insetRight then
+    ruleWidth = ruleWidth - insetLeft - insetRight
+    ruleX = (insetLeft - insetRight) / 2
+  end
+  if ruleWidth and borderEdge then
+    ruleWidth = ruleWidth - borderEdge * 2
+  end
+  if not ruleWidth or ruleWidth <= 0 then
+    ruleWidth = mw.Dimension(plate, "GetWidth")
+  end
+  if plate.puiSocialFooterPlate then
+    -- Already built: re-sample the grain or remove it for a bare header.
+    local wash = plate.puiSocialFooterWash
+    if noWash and wash then
+      pcall(wash.Hide, wash)
+    elseif not noWash then
+      wash = SocialFooterWash(plate, token)
+      if wash then
+        pcall(wash.Show, wash)
+        mw.SocialFooterGrain(plate, wash)
+      end
+    end
+    if plate.puiSocialFooterRule then
+      pcall(function()
+        local rule = plate.puiSocialFooterRule
+        rule:SetWidth(ruleWidth)
+        rule:ClearAllPoints()
+        rule:SetPoint("CENTER", plate, bottom and "BOTTOM" or "TOP",
+                      ruleX, 0)
+      end)
+    end
+    return true
+  end
+  if not token then return false end
+
+  -- ARTWORK, not BACKGROUND: RUNTIME_PROBE 2026-09-19 measured this region as
+  -- 322x65, two anchors, shown, on a visible level-2 frame whose OVERLAY rule
+  -- drew correctly -- and it still rendered nothing on BACKGROUND.
+  if not noWash then
+    local wash = SocialFooterWash(plate, token)
+    if not wash then return false end
+    mw.SocialFooterGrain(plate, wash)
+  end
 
   -- The dedicated Dialog Box divider is centred on the plate edge. The
   -- bottom-edge form is mirrored so its ornament faces into the header.
   local bar = U.ModernWowHorizontalBar(
-    plate, mw.Dimension(plate, "GetWidth"), nil, "OVERLAY", bottom)
+    plate, ruleWidth, nil, "OVERLAY", bottom)
   if not bar then return false end
   local i
   for i = 1, table.getn(bar.puiPieces or {}) do
@@ -6260,7 +6319,7 @@ function U.ModernWowSocialFooterPlate(plate, edge)
                token.ruleShade, 1)
   end
   pcall(function()
-    bar:SetPoint("CENTER", plate, bottom and "BOTTOM" or "TOP", 0, 0)
+    bar:SetPoint("CENTER", plate, bottom and "BOTTOM" or "TOP", ruleX, 0)
   end)
   plate.puiSocialFooterRule = bar
 

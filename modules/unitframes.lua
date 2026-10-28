@@ -3879,13 +3879,6 @@ function U.SetUnitFramePowerTick(key, value)
   end
 end
 
--- UnitClass's unlocalised token for the player, for the modules that build unit
--- frame settings outside this file. Kept here rather than copied there, since
--- this is where the guarded UnitClass lookup already lives.
-function U.PlayerClassToken()
-  return UnitClassToken("player")
-end
-
 function U.SetComboPointAnchor(value)
   value = value == "target" and "target" or "player"
   powerTick.Config().comboAnchor = value
@@ -5766,12 +5759,21 @@ function U.PartyAnchorFrame()
   return frames[PARTY_ANCHOR]
 end
 
+-- Party unit tokens can remain populated with the player's raid subgroup.
+-- Keep the party block out of a real raid; Edit Mode still previews it so its
+-- mover remains configurable there.
+function U.PartyFramesSuppressedByRaid()
+  if type(U.IsUnlocked) == "function" and U.IsUnlocked() then return false end
+  return ApiTruth("GetNumRaidMembers") and true or false
+end
+
 -- Whether member i's pet row occupies space this pass. Edit mode shows every
 -- enabled row whether or not a pet is out, so the block that is dragged into
 -- place is the tallest one it can become rather than whatever the current
 -- roster happens to produce.
 local function PartyPetShown(index)
   if not PartyConfig().partyPets then return false end
+  if U.PartyFramesSuppressedByRaid() then return false end
   -- The Classic theme hands the party over to the client's own frames, which
   -- draw their own nested pet frames. Ours would be invisible anchors with
   -- nothing to anchor, so the option simply does not apply there.
@@ -5792,6 +5794,7 @@ end
 -- occupancy, so it stands as the fallback if the count is missing.
 local function PartyPlayerShown()
   if not PartyConfig().partyPlayer then return false end
+  if U.PartyFramesSuppressedByRaid() then return false end
   if classicNative.partyActive then return false end
   if U.IsUnlocked() then return true end
   if ApiTruth("GetNumPartyMembers") then return true end
@@ -5814,10 +5817,13 @@ LayoutParty = function(force)
     raidWidth, raidHeight = U.RaidPartyFootprint()
   end
   local raid = U.PartyRaidStyleActive()
+  local inRaid = U.PartyFramesSuppressedByRaid()
 
   local border = U.BorderSize()
   local player = PartyPlayerShown() and not raid
-  local shown, shape, i = {}, border .. ":" .. (player and "P" or "-"), nil
+  local shown, shape, i = {}, border .. ":" ..
+                                  (inRaid and "R" or "-") ..
+                                  (player and "P" or "-"), nil
   for i = 1, PARTY_COUNT do
     shown[i] = PartyPetShown(i) and not raid
     shape = shape .. (shown[i] and "1" or "0")
@@ -5831,8 +5837,8 @@ LayoutParty = function(force)
   for i = 1, PARTY_COUNT do
     local member = frames["party" .. i]
     if member then
-      member.puiDisabled = raid or nil
-      if raid then SetFrameShown(member, false) end
+      member.puiDisabled = (raid or inRaid) and true or nil
+      if raid or inRaid then SetFrameShown(member, false) end
     end
   end
 

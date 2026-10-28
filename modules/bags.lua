@@ -259,11 +259,22 @@ function U.SetBagsCategories(value)
     U.BagRouteExisting()
   end
   -- Both views run on the same buttons, so the next refresh tick simply draws
-  -- the other one. Nothing to reload and nothing to rebuild. The bank follows
-  -- the same setting.
+  -- the other one. Nothing to reload and nothing to rebuild.
+  U.RefreshBagCategoryViews()
+  return U.BagsCategoriesEnabled()
+end
+
+-- Redraws the bag, live bank and saved bank category views on their next
+-- refresh; the custom category editor calls it after every edit.
+function U.RefreshBagCategoryViews()
   layoutDirty = true
   if type(U.MarkBankLayoutDirty) == "function" then U.MarkBankLayoutDirty() end
-  return U.BagsCategoriesEnabled()
+  -- The saved bank only lays out while shown.
+  local savedBank = U.G("PandaUIBankViewFrame")
+  if savedBank and savedBank:IsShown() and
+     type(U.RefreshSavedBankWindowGeometry) == "function" then
+    U.RefreshSavedBankWindowGeometry()
+  end
 end
 
 -- Classic keeps the merged PandaUI container but paints it from the live
@@ -2581,7 +2592,20 @@ local function BuildSettingsPage(parent)
     table.insert(widgets, barHint)
   end
 
+  -- The player's own categories (modules/bagcustomcategories.lua).
+  local custom
+  if type(U.BuildBagCustomCategoryEditor) == "function" then
+    custom = U.BuildBagCustomCategoryEditor(parent, barHint or bar.box)
+    if custom then
+      local k
+      for k = 1, table.getn(custom.widgets) do
+        table.insert(widgets, custom.widgets[k])
+      end
+    end
+  end
+
   local function Refresh()
+    if custom then custom.Refresh() end
     enable.SetValue(U.BagsEnabled())
     categories.SetValue(U.BagsCategoriesEnabled())
     bagScale.SetValue(U.GetBagWindowScale())

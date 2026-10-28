@@ -49,6 +49,315 @@ local function G(name)
   return U.G(name)
 end
 
+-- ---------------------------------------------------------------------------
+-- Guarded bulk buying
+--
+-- Ctrl+Shift+Right-click is intentionally harder to trigger than the stock
+-- purchase gestures. It proposes at most five item stacks, confirms the exact
+-- amount and cost, then sends one bounded purchase at a time. Every purchase
+-- must appear in the bags before the next is sent; a changed vendor row,
+-- closed merchant, failed call or three-second acknowledgement timeout stops
+-- the queue immediately.
+-- ---------------------------------------------------------------------------
+
+local BULK_STACK_LIMIT = 5
+local BULK_TIMEOUT = 3
+local BULK_DELAY = 0.15
+local BULK_UPDATE_ID = "merchant.bulk-buy"
+local bulk = {
+  active = false,
+  waiting = false,
+  elapsed = 0,
+}
+local originalMerchantItemClick
+local BulkMerchantItemClick
+local bulkClickInstalled = false
+
+local function CountBagItem(itemID)
+  if not itemID then return nil end
+  local total = 0
+  local bag, slot
+  for bag = 0, 4 do
+    local slots = U.ContainerSlotCount(bag)
+    for slot = 1, slots do
+      local link = U.ContainerSlotLink(bag, slot)
+      if link and U.ItemLinkId(link) == itemID then
+        local _, count = U.ContainerSlotInfo(bag, slot)
+        total = total + (tonumber(count) or 1)
+      end
+    end
+  end
+  return total
+end
+
+-- Count partial stacks everywhere. Empty backpack slots are always usable;
+-- empty equipped-bag slots are counted only after that bag proves it accepts
+-- this item by already containing one. This deliberately underestimates some
+-- general bags instead of promising space in an incompatible specialty bag.
+local function SafeBagCapacity(itemID, stackSize)
+  if not itemID or not stackSize or stackSize < 1 then return 0 end
+  local capacity = 0
+  local bag, slot
+  for bag = 0, 4 do
+    local empty = 0
+    local accepts = bag == 0
+    local slots = U.ContainerSlotCount(bag)
+    for slot = 1, slots do
+      local link = U.ContainerSlotLink(bag, slot)
+      if not link then
+        empty = empty + 1
+      elseif U.ItemLinkId(link) == itemID then
+        accepts = true
+        local _, count = U.ContainerSlotInfo(bag, slot)
+        count = tonumber(count) or 1
+        if count < stackSize then capacity = capacity + stackSize - count end
+      end
+    end
+    if accepts then capacity = capacity + empty * stackSize end
+  end
+  return capacity
+end
+
+local function MerchantBulkData(index)
+  local getInfo = G("GetMerchantItemInfo")
+  local getLink = G("GetMerchantItemLink")
+  local getStack = G("GetMerchantItemMaxStack")
+  if type(getInfo) ~= "function" or type(getLink) ~= "function" or
+     type(getStack) ~= "function" then
+    return nil
+  end
+
+  local infoOk, name, _, price, preset, available = pcall(getInfo, index)
+  local linkOk, link = pcall(getLink, index)
+  local stackOk, stackSize = pcall(getStack, index)
+  local itemID = linkOk and U.ItemLinkId(link) or nil
+  price = tonumber(price) or 0
+  preset = tonumber(preset) or 1
+  available = tonumber(available)
+  stackSize = stackOk and tonumber(stackSize) or nil
+  if not infoOk or type(name) ~= "string" or name == "" or not itemID or
+     preset < 1 or not stackSize or stackSize < 1 then
+    return nil
+  end
+
+  local fit = SafeBagCapacity(itemID, stackSize)
+  fit = math.floor(fit / preset) * preset
+
+  local afford = fit
+  if price > 0 then
+    local getMoney = G("GetMoney")
+    local moneyOk, money = false, nil
+    if type(getMoney) == "function" then moneyOk, money = pcall(getMoney) end
+    money = moneyOk and tonumber(money) or 0
+    afford = math.floor(money / price) * preset
+  end
+
+  local maximum = math.min(fit, afford,
+    math.max(stackSize * BULK_STACK_LIMIT, preset))
+  if available and available >= 0 then
+    maximum = math.min(maximum, available * preset)
+  end
+  maximum = math.floor(maximum / preset) * preset
+
+  return {
+    index = index,
+    itemID = itemID,
+    name = name,
+    price = price,
+    preset = preset,
+    stackSize = stackSize,
+    maximum = maximum,
+    cost = math.floor(maximum / preset) * price,
+  }
+end
+
+local function StopBulkPurchase()
+  U.UnregisterUpdate(BULK_UPDATE_ID)
+  bulk.active = false
+  bulk.waiting = false
+  bulk.elapsed = 0
+  bulk.expected = nil
+  bulk.pendingUnits = nil
+end
+
+local function AbortBulkPurchase(message)
+  local wasActive = bulk.active
+  StopBulkPurchase()
+  if wasActive and message then U.Print(message) end
+end
+
+local function ConfirmBulkStep()
+  if not bulk.active or not bulk.waiting or not bulk.expected then return false end
+  local count = CountBagItem(bulk.itemID)
+  if not count or count < bulk.expected then return false end
+
+  bulk.remaining = bulk.remaining - bulk.pendingUnits
+  bulk.waiting = false
+  bulk.expected = nil
+  bulk.pendingUnits = nil
+  bulk.elapsed = 0
+  if bulk.remaining <= 0 then
+    local amount, name = bulk.amount, bulk.name
+    StopBulkPurchase()
+    U.Print(U.L("MERCHANT_BULK_COMPLETE", amount, name))
+  end
+  return true
+end
+
+local function SendBulkStep()
+  if not bulk.active or bulk.waiting then return end
+
+  local current = MerchantBulkData(bulk.index)
+  local merchantFrame = G("MerchantFrame")
+  if not current or current.itemID ~= bulk.itemID or
+     not merchantFrame or merchantFrame.selectedTab ~= 1 then
+    AbortBulkPurchase(U.L("MERCHANT_BULK_CHANGED"))
+    return
+  end
+
+  local request, units
+  if bulk.preset > 1 then
+    request, units = 1, bulk.preset
+  else
+    request = math.min(bulk.remaining, bulk.stackSize)
+    units = request
+  end
+  if units > bulk.remaining or current.maximum < units then
+    AbortBulkPurchase(U.L("MERCHANT_BULK_CHANGED"))
+    return
+  end
+
+  local before = CountBagItem(bulk.itemID)
+  local buy = G("BuyMerchantItem")
+  if before == nil or type(buy) ~= "function" then
+    AbortBulkPurchase(U.L("MERCHANT_BULK_ABORTED"))
+    return
+  end
+
+  bulk.waiting = true
+  bulk.pendingUnits = units
+  bulk.expected = before + units
+  bulk.elapsed = 0
+  local ok = pcall(buy, bulk.index, request)
+  if not ok then AbortBulkPurchase(U.L("MERCHANT_BULK_ABORTED")) end
+end
+
+local function BulkTick(step)
+  if not bulk.active then
+    U.UnregisterUpdate(BULK_UPDATE_ID)
+    return
+  end
+
+  bulk.elapsed = bulk.elapsed + (tonumber(step) or 0.1)
+  if bulk.waiting then
+    if ConfirmBulkStep() then return end
+    if bulk.elapsed >= BULK_TIMEOUT then
+      AbortBulkPurchase(U.L("MERCHANT_BULK_ABORTED"))
+    end
+    return
+  end
+
+  if bulk.elapsed >= BULK_DELAY then
+    bulk.elapsed = 0
+    SendBulkStep()
+  end
+end
+
+local function StartBulkPurchase(proposal)
+  local current = MerchantBulkData(proposal.index)
+  if not current or current.itemID ~= proposal.itemID or
+     current.maximum < proposal.maximum then
+    U.Print(U.L("MERCHANT_BULK_CHANGED"))
+    return
+  end
+
+  StopBulkPurchase()
+  bulk.active = true
+  bulk.index = proposal.index
+  bulk.itemID = proposal.itemID
+  bulk.name = proposal.name
+  bulk.preset = proposal.preset
+  bulk.stackSize = proposal.stackSize
+  bulk.amount = proposal.maximum
+  bulk.remaining = proposal.maximum
+  bulk.elapsed = BULK_DELAY
+  U.RegisterUpdate(BULK_UPDATE_ID, 0.1, BulkTick)
+  SendBulkStep()
+end
+
+local function OfferBulkPurchase(anchor)
+  if not anchor or type(anchor.GetID) ~= "function" then return false end
+  local idOk, index = pcall(anchor.GetID, anchor)
+  index = idOk and tonumber(index) or nil
+  local proposal = index and MerchantBulkData(index) or nil
+  if not proposal then return false end
+  if proposal.maximum < 1 then
+    U.Print(U.L("MERCHANT_BULK_NOTHING"))
+    return true
+  end
+
+  U.ShowConfirm({
+    owner = "merchant.bulk-buy",
+    centered = true,
+    modernWow = true,
+    modernWowModule = "merchant",
+    text = U.L("MERCHANT_BULK_CONFIRM", proposal.maximum, proposal.name),
+    moneyCopper = proposal.cost,
+    acceptText = U.L("MERCHANT_BULK_BUY"),
+    cancelText = U.L("COMMON_CANCEL"),
+    onAccept = function() StartBulkPurchase(proposal) end,
+  })
+  return true
+end
+
+BulkMerchantItemClick = function(button, ignoreModifiers)
+  local merchantFrame = G("MerchantFrame")
+  local control = G("IsControlKeyDown")
+  local shift = G("IsShiftKeyDown")
+  local controlOk, controlDown = false, nil
+  local shiftOk, shiftDown = false, nil
+  if type(control) == "function" then
+    controlOk, controlDown = pcall(control)
+  end
+  if type(shift) == "function" then
+    shiftOk, shiftDown = pcall(shift)
+  end
+  if button == "RightButton" and not ignoreModifiers and merchantFrame and
+     merchantFrame.selectedTab == 1 and controlOk and controlDown and
+     shiftOk and shiftDown then
+    if OfferBulkPurchase(G("this")) then return end
+  end
+  if originalMerchantItemClick then
+    return originalMerchantItemClick(button, ignoreModifiers)
+  end
+end
+
+local function InstallBulkPurchaseClick()
+  if bulkClickInstalled then
+    return G("MerchantItemButton_OnClick") == BulkMerchantItemClick
+  end
+  local current = G("MerchantItemButton_OnClick")
+  if current == BulkMerchantItemClick then
+    bulkClickInstalled = true
+    return true
+  end
+  if type(current) ~= "function" then return false end
+  originalMerchantItemClick = current
+  if not U.SetG("MerchantItemButton_OnClick", BulkMerchantItemClick) then
+    return false
+  end
+  bulkClickInstalled = G("MerchantItemButton_OnClick") == BulkMerchantItemClick
+  return bulkClickInstalled
+end
+
+local function AddBulkTooltipHint()
+  local tooltip = G("GameTooltip")
+  if not tooltip or type(tooltip.AddLine) ~= "function" then return end
+  pcall(tooltip.AddLine, tooltip, U.L("MERCHANT_BULK_HINT"),
+        0.96, 0.68, 0.04)
+  pcall(tooltip.Show, tooltip)
+end
+
 local function ResolveItemButtonIcon(button, legacyName)
   local icon = legacyName and G(legacyName) or nil
   if icon or not button then return icon end
@@ -753,6 +1062,7 @@ local function HookItemTooltip(itemButton)
     if not linkOk or not infoOk or type(name) ~= "string" then return end
 
     U.ColorTooltipItemName(link, nil, name)
+    AddBulkTooltipHint()
   end)
 
   U.PostHookScript(itemButton, "OnLeave", function()
@@ -791,6 +1101,7 @@ end
 
 local function MerchantShown()
   frame = frame or G("MerchantFrame")
+  InstallBulkPurchaseClick()
   RememberBagItemQualities()
   BindBuybackRarity()
   if RefreshSellAllJunkButton then RefreshSellAllJunkButton() end
@@ -910,6 +1221,7 @@ local function ScheduleLastBuybackRefresh()
 end
 
 local function MerchantInventoryUpdated()
+  ConfirmBulkStep()
   RememberBagItemQualities()
   ScheduleLastBuybackRefresh()
   if RefreshSellAllJunkButton then RefreshSellAllJunkButton() end
@@ -1652,8 +1964,10 @@ local function BuildFrame()
   U.PostHookScript(frame, "OnShow", Reapply)
   U.PostHookScript(frame, "OnHide", function()
     if panel then panel:Hide() end
+    AbortBulkPurchase(nil)
     if type(U.HideConfirm) == "function" then
       U.HideConfirm("merchant.sell-junk")
+      U.HideConfirm("merchant.bulk-buy")
     end
   end)
 
@@ -1707,6 +2021,7 @@ function MER:OnEnable()
   -- Ahead of the theme gate: the tooltip hooks change no artwork, so Classic
   -- gets them on its untouched vendor window too.
   HookItemTooltips()
+  InstallBulkPurchaseClick()
   RememberBagItemQualities()
   BindBuybackRarity()
 
@@ -1716,8 +2031,15 @@ function MER:OnEnable()
   U.RegisterEvent("MERCHANT_SHOW", MerchantShown)
   U.RegisterEvent("MERCHANT_UPDATE", MerchantInventoryUpdated)
   U.RegisterEvent("BAG_UPDATE", function()
+    ConfirmBulkStep()
     RememberBagItemQualities()
     if RefreshSellAllJunkButton then RefreshSellAllJunkButton() end
+  end)
+  U.RegisterEvent("MERCHANT_CLOSED", function()
+    AbortBulkPurchase(nil)
+    if type(U.HideConfirm) == "function" then
+      U.HideConfirm("merchant.bulk-buy")
+    end
   end)
 
   useModernWow = type(U.GetActiveThemeStyle) == "function" and

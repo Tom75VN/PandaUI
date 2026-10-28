@@ -254,6 +254,12 @@ local function UpdateCorpseArrow()
   frame:Show()
 end
 
+function U.ApplyMinimapArrowShape()
+  state.squareMinimap = type(U.MinimapIsSquare) == "function" and
+                        U.MinimapIsSquare() and true or false
+  UpdateCorpseArrow()
+end
+
 local function Refresh()
   local cell = FacingCell()
   if cell ~= nil and cell ~= state.cell then
@@ -335,7 +341,8 @@ function ARROW:OnEnable()
   end
 
   state.facingModel = FindFacingModel(U.G("Minimap"))
-  state.squareMinimap = U.GetActiveThemeStyle() == "modern"
+  state.squareMinimap = type(U.MinimapIsSquare) == "function" and
+                        U.MinimapIsSquare() and true or false
   state.worldMapFacingModel = FindFacingModel(U.G("WorldMapFrame"))
   local initialCell = FacingCell()
   if initialCell == nil then

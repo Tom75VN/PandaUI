@@ -16,9 +16,7 @@ code is in, compiler-checked only · **Blocked** = needs runtime evidence first
 
 Phases 0–2 are ported. None of it has run on OctoWoW. This needs a **client
 relaunch**, because the TOC gained `core/playercache.lua` and
-`modules/nameplatesettings.lua`. Then run the checklists below and record what
-they show in `knowledge.json` (record
-`nameplates.pandaui_shaguplates_options_unverified`).
+`modules/nameplatesettings.lua`.
 
 **Reported 2026-10-27:** the observed issue may be a conflict with ShaguTweaks
 and ShaguTweaks Extra. Confirm with each addon disabled independently before
@@ -131,13 +129,22 @@ None of this is verified on OctoWoW.
 
 ## Requested (user request 2026-10-26, not started)
 
-**Tank mode**: colour the health bar by threat state.
+**Tank plates / threat mode:** build this once as a complete colour-coded
+health-bar feature rather than shipping a percentage display first and
+replacing it later. Prefer the player-facing name **Tank plates**. If OctoWoW
+cannot provide enough state for a proper tank mode, expose the supported
+subset as a **Threat** option instead.
 
 | State | Colour |
 |---|---|
 | The player has aggro on the mob | Green |
 | The player does not have aggro | Red |
 | Another tank has aggro | Blue (or another colour) |
+
+The health-bar colours are the preferred display. A threat percentage or
+compact indicator above the plate is only a fallback if reliable numeric
+threat is available but colour coding cannot represent the supported states.
+Do not plan separate percentage and colour upgrades.
 
 Also wanted: a colour choice for a target that is stunned, disoriented or
 otherwise crowd-controlled.
@@ -153,20 +160,3 @@ target, combat-log aura lines for CC) and record it in `knowledge.json`.
 Target glow, font/border/texture pickers, vertical bar, SuperWoW combat-state
 colours (no SuperWoW evidence on Octo), `libhealth` (`core/unitvitals.lua`
 covers it), Turtle extras, profiles, `/rl` and `/sp`.
-
-## In-game checklist (record each result)
-
-The full numbered list is in `TESTS_TODO.md`; this is the summary.
-
-- [ ] After relaunch: Settings shows a **Nameplates** group with four pages, with no overlap under modern, classic-wow or modern-wow.
-- [ ] Sliders resize live plates; font sizes change; nothing drifts after `/reload`.
-- [ ] `ShowNameplates`, `HideNameplates`, `ShowFriendNameplates` and `HideFriendNameplates` act at login, after zoning and on toggle.
-- [ ] Each health format and position works. A creature shows current / max; a player shows percent.
-- [ ] Health hiding per category, plus the target and damaged exceptions.
-- [ ] Non-target plates take the right reaction colour. If not, read `/pui np`'s `sample.barColor`.
-- [ ] Target zoom stays anchored. Fade, outline and strata follow target changes. Bags still cover the target plate.
-- [ ] A raid mark shows on the target, then on a non-target plate (have a party leader mark a mob).
-- [ ] Rogue or Cat Form: combo points appear under the bar and stack under the cast bar and guild line.
-- [ ] Class colours and guild line for party and guild members; an NPC sharing a player's name keeps its reaction colour.
-- [ ] Totems: health hidden; icon mode shows the right icon. Critters: health hidden.
-- [ ] Long English, Russian and Chinese names abbreviate, then cut with "..." past 18 characters, without broken characters.

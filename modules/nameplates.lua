@@ -30,8 +30,8 @@
 -- outlines, raid icons, name abbreviation, class colours, guild line, combo
 -- points, totem icons and critter hiding. The settings pages are
 -- modules/nameplatesettings.lua. ShaguPlates is intent only: no code, config
--- schema or assets are copied. Not here: combat-state colours, click handling
--- and mouselook.
+-- schema or assets are copied. Combat-state colours are Tank Mode
+-- (style.TankKey). Not here: click handling and mouselook.
 --
 -- Compatibility notes that shaped this file:
 --
@@ -153,6 +153,20 @@ local defaults = {
   raidIconSize   = 16,
   raidIconX      = 0,
   raidIconY      = 0,
+
+  -- Tank Mode (style.TankKey): hostile NPCs in combat coloured by whom they
+  -- target. Needs Nampower.
+  tankMode         = false,
+  tankAggroR       = 0,
+  tankAggroG       = 1,
+  tankAggroB       = 0,
+  tankNoAggroR     = 1,
+  tankNoAggroG     = 0,
+  tankNoAggroB     = 0,
+  tankShowInactive = false,
+  tankInactiveR    = 0,
+  tankInactiveG    = 0.45,
+  tankInactiveB    = 1,
 }
 
 -- Option behaviour (see ShaguPlates' nameplate settings); one table so the
@@ -730,19 +744,24 @@ end
 
 style.FRIENDLY_TYPE = { FRIENDLY_UNIT = true, FRIENDLY_NPC = true }
 
--- The bar takes the class colour for an enemy or a friendly player when its
--- option is on, else the reaction colour; a friendly player's name takes it
--- with classColorFriendlyName. Cached per plate on the resolved key.
-function style.RefreshColors(overlay, unitType, name)
+-- The bar takes the Tank Mode colour when style.TankKey names one, else the
+-- class colour for an enemy or a friendly player when its option is on, else
+-- the reaction colour; a friendly player's name takes the class colour with
+-- classColorFriendlyName. Cached per plate on the resolved key.
+function style.RefreshColors(overlay, unitType, name, tankKey)
   local class = name and style.ClassOf(name)
   local friendly = style.FRIENDLY_TYPE[unitType] and true or false
   local barClass = class and ((friendly and cfg.classColorFriendly) or
                               (not friendly and cfg.classColorEnemy)) and
                    class or nil
-  local barKey = barClass or unitType
+  local barKey = tankKey or barClass or unitType
   if barKey ~= overlay.cache.barColor then
     overlay.cache.barColor = barKey
-    if barClass then
+    if tankKey then
+      local keys = style.TANK_RGB[tankKey]
+      U.SetStatusBarColor(overlay.health, cfg[keys[1]], cfg[keys[2]],
+                          cfg[keys[3]], 1)
+    elseif barClass then
       U.SetStatusBarColor(overlay.health, M.ClassColor(barClass))
     else
       U.SetStatusBarColor(overlay.health, M.Unpack(UNIT_COLOR[unitType]))
@@ -758,6 +777,110 @@ function style.RefreshColors(overlay, unitType, name)
   local r, g, b = 1, 1, 1
   if nameClass then r, g, b = M.ClassColor(nameClass) end
   pcall(overlay.name.SetTextColor, overlay.name, r, g, b, 1)
+end
+
+-- ---------------------------------------------------------------------------
+-- Tank Mode
+--
+-- Behaviour after BlizzNameplatesPlus' Tank Mode (no code taken): a living,
+-- untapped-or-ours hostile NPC in combat is TANK_AGGRO while it targets the
+-- player, TANK_NO_AGGRO while it targets any other unit, and optionally
+-- TANK_INACTIVE while stunned, confused or fleeing. A missing or unreadable
+-- target is never TANK_NO_AGGRO: the plate keeps its ordinary colour.
+--
+-- Needs Nampower: the plate's GUID names the unit, "<guid>target" its victim
+-- and GetUnitField(guid, "flags") its combat and control state
+-- (knowledge.json / nameplates.tank_mode_guid_target_flags). The masks are
+-- decimal because Lua 5.0 has no hex literals.
+-- ---------------------------------------------------------------------------
+style.TANK_RGB = {
+  TANK_AGGRO    = { "tankAggroR", "tankAggroG", "tankAggroB" },
+  TANK_NO_AGGRO = { "tankNoAggroR", "tankNoAggroG", "tankNoAggroB" },
+  TANK_INACTIVE = { "tankInactiveR", "tankInactiveG", "tankInactiveB" },
+}
+style.FLAG_STUNNED  = 262144   -- UNIT_FLAG_STUNNED
+style.FLAG_COMBAT   = 524288   -- UNIT_FLAG_IN_COMBAT
+style.FLAG_CONFUSED = 4194304  -- UNIT_FLAG_CONFUSED
+style.FLAG_FLEEING  = 8388608  -- UNIT_FLAG_FLEEING
+
+function style.HasFlag(flags, mask)
+  return math.mod(math.floor(flags / mask), 2) == 1
+end
+
+-- A summon, guardian or totem whose owner is a player (high GUID word zero).
+function style.PlayerOwned(guid)
+  local fn = ResolveApiFn("GetUnitField")
+  if not fn then return false end
+  local fields = style.OWNER_FIELDS
+  local i
+  for i = 1, table.getn(fields) do
+    local ok, owner = pcall(fn, guid, fields[i])
+    if ok and type(owner) == "string" and owner ~= "0x0000000000000000" and
+       string.find(owner, "^0x00000000") then
+      return true
+    end
+  end
+  return false
+end
+style.OWNER_FIELDS = { "summonedBy", "createdBy", "charmedBy" }
+
+-- What never changes for one GUID, read once when a plate takes it.
+function style.TankBind(overlay, guid)
+  overlay.tankGuid = guid
+  overlay.tankToken = guid .. "target"
+  overlay.tankUnit = not ApiTruth("UnitIsPlayer", guid) and
+                     not ApiTruth("UnitPlayerControlled", guid) and
+                     not style.PlayerOwned(guid)
+end
+
+function style.TankClear(overlay)
+  overlay.tankGuid = nil
+  overlay.tankToken = nil
+  overlay.tankUnit = nil
+end
+
+-- The Tank Mode colour key for a visible plate, or nil for its ordinary
+-- colour. alive is false only when the native bar reads zero health.
+function style.TankKey(overlay, alive)
+  local guid = overlay.guid
+  if not guid then return nil end
+  if overlay.tankGuid ~= guid then style.TankBind(overlay, guid) end
+  if not overlay.tankUnit or not alive then return nil end
+
+  -- Combat first: it is the cheap exit for every plate outside a pull, and
+  -- it keeps neutral mobs yellow until they are engaged.
+  local flags = ApiNumber("GetUnitField", guid, "flags")
+  local inCombat
+  if flags then
+    if flags < 0 then flags = flags + 4294967296 end
+    inCombat = style.HasFlag(flags, style.FLAG_COMBAT)
+  else
+    inCombat = ApiTruth("UnitAffectingCombat", guid)
+  end
+  if not inCombat then return nil end
+
+  if not ApiTruth("UnitCanAttack", "player", guid) or
+     ApiTruth("UnitIsDead", guid) then
+    return nil
+  end
+  if ApiTruth("UnitIsTapped", guid) and
+     not ApiTruth("UnitIsTappedByPlayer", guid) then
+    return nil
+  end
+
+  if cfg.tankShowInactive and flags and
+     (style.HasFlag(flags, style.FLAG_STUNNED) or
+      style.HasFlag(flags, style.FLAG_CONFUSED) or
+      style.HasFlag(flags, style.FLAG_FLEEING)) then
+    return "TANK_INACTIVE"
+  end
+
+  -- UnitExists, not UnitIsUnit(token, token): the latter is true for a mob
+  -- with no target (probe platetank.v1), which would have drawn it red.
+  local token = overlay.tankToken
+  if not ApiTruth("UnitExists", token) then return nil end
+  if ApiTruth("UnitIsUnit", token, "player") then return "TANK_AGGRO" end
+  return "TANK_NO_AGGRO"
 end
 
 -- ---------------------------------------------------------------------------
@@ -1935,6 +2058,7 @@ local function RefreshPlate(overlay)
     -- recycled plate cannot show the previous unit's. Its engagement goes
     -- with it (reaction.PlateEngaged).
     overlay.engaged = nil
+    if overlay.tankGuid then style.TankClear(overlay) end
     if overlay.isTarget or overlay.guid or overlay.auraActive or
        overlay.castLive then
       overlay.isTarget = false
@@ -2020,15 +2144,21 @@ local function RefreshPlate(overlay)
     end
   end
 
-  -- Reaction, then the colours and the totem icon: both decide whether the
-  -- health bar shows (style.HideHealth).
+  -- Health is read first so Tank Mode can drop a corpse; then the reaction,
+  -- the colours and the totem icon, which decide whether the health bar
+  -- shows (style.HideHealth).
+  local value, minimum, maximum = ReadHealth(overlay)
   local unitType = PlateUnitType(overlay, name)
   overlay.cache.unitType = unitType
-  style.RefreshColors(overlay, unitType, name)
+  local tankKey = nil
+  if cfg.tankMode then
+    tankKey = style.TankKey(overlay, not value or value > minimum)
+  end
+  overlay.tankKey = tankKey
+  style.RefreshColors(overlay, unitType, name, tankKey)
   style.RefreshTotem(overlay, name)
 
   -- Health
-  local value, minimum, maximum = ReadHealth(overlay)
   if value and not style.HideHealth(overlay, unitType, name,
                                     value < maximum) then
     overlay.health:Show()

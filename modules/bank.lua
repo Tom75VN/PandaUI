@@ -1284,6 +1284,9 @@ end
 
 function BK:OnEnable()
   if frame then return end
+  -- The Bags page's Enable switch covers the bank too: off leaves the stock
+  -- BankFrame untouched for another bag addon.
+  if type(U.BagsEnabled) == "function" and not U.BagsEnabled() then return end
 
   Build()
   modernBank.BuildResize()

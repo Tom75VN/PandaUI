@@ -206,10 +206,21 @@ function rows.Requirements(id, serviceType)
   return text
 end
 
+-- A row's service index, only while it names a service of the open trainer.
+-- Rows keep their last SetID when hidden or when another trainer opens, and
+-- the native update only queries 1..GetNumTrainerServices (octo-framexml
+-- ClassTrainerFrame.lua:95). Asking the Training API for an index outside
+-- that range is the suspected cause of the trainer client crash
+-- (knowledge.json / trainer.out_of_range_service_index_crash); pcall cannot
+-- catch it, so every service read goes through this check.
 function rows.RowId(row)
   if not row or not row.GetID then return nil end
   local ok, value = pcall(row.GetID, row)
-  return ok and tonumber(value) or nil
+  local id = ok and tonumber(value) or nil
+  if not id or id < 1 then return nil end
+  local total = tonumber((rows.Call("GetNumTrainerServices"))) or 0
+  if id > total then return nil end
+  return id
 end
 
 function rows.ServiceTextColor(serviceType)
