@@ -32,6 +32,32 @@ local ROW_FOREVER_TEXT_Y = -3
 local StyleList        -- defined below; rows re-run it when a tick changes.
 local activeDropdown   -- last dropdown whose button we saw opened.
 
+-- Retail's UIDropDownListTemplate frames every popup list through
+-- DialogBorderDarkTemplate. Classic WoW and Modern WoW unit popups use the
+-- matching PandaUI ThinBorder family while the flat Modern theme stays flat.
+local UNIT_POPUP_DROPDOWNS = {
+  PlayerFrameDropDown = true,
+  TargetFrameDropDown = true,
+  PetFrameDropDown = true,
+  PartyMemberFrame1DropDown = true,
+  PartyMemberFrame2DropDown = true,
+  PartyMemberFrame3DropDown = true,
+  PartyMemberFrame4DropDown = true,
+  RaidFrameDropDown = true,
+  PandaUIRaidDropDown = true,
+}
+
+local function UnitPopupUsesModernWowBorder(dropdown)
+  if not dropdown then return false end
+  local style = type(U.GetActiveThemeStyle) == "function" and
+                U.GetActiveThemeStyle() or nil
+  if style ~= "classic-wow" and style ~= "modern-wow" then return false end
+  if dropdown.puiUnitPopupMenu then return true end
+  if type(dropdown.GetName) ~= "function" then return false end
+  local ok, name = pcall(dropdown.GetName, dropdown)
+  return ok and UNIT_POPUP_DROPDOWNS[name] and true or false
+end
+
 local function RemoveButtonArt(button)
   if not button then return end
   local getters = { "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }
@@ -498,7 +524,9 @@ StyleList = function(level)
   -- dropdown opened it: Modern WoW for a control styled on that path, flat
   -- otherwise.
   local owner = OwningDropdown()
-  local modern = level == 1 and owner and owner.puiDropdownModernWowStyled
+  local unitPopup = owner and UnitPopupUsesModernWowBorder(owner)
+  local modern = owner and ((level == 1 and owner.puiDropdownModernWowStyled) or
+                            unitPopup)
   local bedMenu = level == 1 and owner and owner.puiDropdownBed and
                   owner.puiDropdownBed.menu
   if bedMenu then
@@ -529,7 +557,9 @@ StyleList = function(level)
     if list.puiDropdownBedMenu then pcall(list.puiDropdownBedMenu.Hide, list.puiDropdownBedMenu) end
     local chrome = ModernWowChrome(list)
     if chrome then
-      ModernWowFill(chrome, list, M.modernWow.dropdown.listFill)
+      local fill = unitPopup and M.modernWow.dropdown.unitPopupListFill or
+                   M.modernWow.dropdown.listFill
+      ModernWowFill(chrome, list, fill)
       pcall(chrome.Show, chrome)
     end
   else

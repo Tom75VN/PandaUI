@@ -4,6 +4,29 @@ Player-visible PandaUI changes, newest first. Keep every bullet short, clear and
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-29
+
+### Added
+
+- Crafting windows add right-edge tabs for learned professions, including First Aid.
+
+### Changed
+
+- Classic WoW and Modern WoW unit menus use Retail-style 80% backgrounds.
+
+### Removed
+
+- PandaUI leaves minimap and world-map ping placement native.
+
+### Fixed
+
+- Live HUD anchor checks no longer trigger native client crashes.
+- Fullscreen world-map zoom waits for native marker placement before drawing.
+- Trainer styling avoids opening, closing, updating and collapse-control crash paths.
+- Trainer lifecycle probing completed cleanly through opening, updating and closing.
+- Raid right-click menus now include Whisper; test members open its chat input.
+- Profession actions no longer show the Spellbook's hover or action-bar glows.
+
 ## [0.13.0] - 2026-10-28
 
 ### Added

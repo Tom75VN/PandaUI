@@ -860,7 +860,7 @@ end
 --
 -- The tooltip module records that native code can re-place a tooltip after
 -- Lua runs (tooltip.default_corner_mover), so while the row stays hovered the
--- point is re-checked every frame and re-applied only when it has changed.
+-- measured placement is re-checked every frame without reading GetPoint.
 -- ---------------------------------------------------------------------------
 function lw.TooltipFits(tooltip)
   local ok, left, chromeScale, tipWidth, tipScale, rootScale, rootLeft = pcall(function()
@@ -886,9 +886,9 @@ function lw.PlaceTooltip(index)
   local rows = g.rowBottoms[index] and index or 1
   local y = -((g.rowBottoms[rows] - g.buttonSize) - (g.rowsTop - t.header))
   local x = -t.tooltip.gap
-  local point, relative, relativePoint, px, py = U.GetFramePoint(tooltip)
-  if point == "TOPRIGHT" and relative == lw.chrome and relativePoint == "TOPLEFT" and
-     px == x and py == y then return false end
+  if U.FramePointMatches(tooltip, "TOPRIGHT", lw.chrome, "TOPLEFT", x, y) then
+    return false
+  end
 
   local placed = pcall(function()
     tooltip:ClearAllPoints()

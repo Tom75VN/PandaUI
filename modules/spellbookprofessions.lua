@@ -299,6 +299,53 @@ function U.ModernWowProfessionSpell(profession)
   return nil
 end
 
+-- Learned professions that open a TradeSkill/Craft window. Forever builds
+-- its right-edge profession tabs from the learned profession list, skips
+-- entries that cannot show crafting UI, and casts the profession spell from
+-- the tab click (Forever 1.60.1.69913: Blizzard_ProfessionsFrame.lua:15-73;
+-- Blizzard_ProfessionsTemplates.lua:949-990). Vanilla has no
+-- CanTradeSkillShowCraftingUI, so exclude its gathering-only skills here.
+prof.CRAFTING = {
+  alchemy = true, blacksmithing = true, enchanting = true,
+  engineering = true, leatherworking = true, mining = true,
+  tailoring = true, cooking = true, firstaid = true, poisons = true,
+}
+
+function U.GetCraftingProfessionTabs()
+  local rows = prof.Scan()
+  local tabs = {}
+  local i
+  -- ordered is a fixed six-slot model and may contain nil gaps. table.getn
+  -- stops at an implementation-defined boundary in a sparse table, which
+  -- omitted later secondary professions such as First Aid in slot six.
+  for i = 1, 6 do
+    local entry = rows.ordered[i]
+    local spell = entry and entry.spells and entry.spells[1]
+    if entry and prof.CRAFTING[entry.key] and spell then
+      table.insert(tabs, {
+        key = entry.key,
+        name = entry.name,
+        icon = spell.icon,
+        slot = spell.slot,
+        book = prof.BookType(),
+      })
+    end
+  end
+  return tabs
+end
+
+-- CastSpell is the stock click path in Octo's SpellButton_OnClick and in
+-- working 1.12 addons. Keep the call behind the public helper so both
+-- profession drawing paths share the exact same switch behavior.
+function U.OpenCraftingProfession(entry)
+  if type(entry) ~= "table" or not tonumber(entry.slot) then
+    return false, "missing profession spell"
+  end
+  local cast = U.G("CastSpell")
+  if type(cast) ~= "function" then return false, "CastSpell unavailable" end
+  return pcall(cast, entry.slot, entry.book or prof.BookType())
+end
+
 function prof.Scan()
   local lookup = prof.Lookup()
   local rows = { primary = {} }

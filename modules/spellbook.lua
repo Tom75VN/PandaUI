@@ -1584,6 +1584,13 @@ function missing.Wanted(index)
   if not config or not config.barHint then return false end
   if type(index) ~= "number" then return false end
 
+  -- The Professions page reuses SpellButton1-12 as its action controls, but
+  -- the missing-from-bars mark belongs only to the Spellbook's spell pages.
+  -- Returning false also clears any themed glow left on a reused button when
+  -- the page's repaint runs during prof.Enter.
+  if type(U.SpellBookProfessionsShown) == "function" and
+     U.SpellBookProfessionsShown() then return false end
+
   -- Pet spells belong to the pet bar, which these action slots are not, so
   -- the pet book is left alone entirely rather than marked wholesale.
   local bookType = rank.BookType()

@@ -2250,15 +2250,9 @@ local function MirrorNativeSize()
 end
 
 local function AnchorDrifted(position)
-  local point, relative, relativePoint, x, y =
-    U.ReadFramePoint(nativeMoverAnchor)
-  if type(point) ~= "string" then return true end
-  if relative and relative ~= UIParent then return true end
-  if point ~= position.point then return true end
-  if relativePoint ~= (position.relativePoint or position.point) then return true end
-  if math.abs(x - (tonumber(position.x) or 0)) > DRIFT_EPSILON then return true end
-  if math.abs(y - (tonumber(position.y) or 0)) > DRIFT_EPSILON then return true end
-  return false
+  return not U.FramePointMatches(nativeMoverAnchor, position.point, UIParent,
+                                 position.relativePoint or position.point,
+                                 position.x, position.y, DRIFT_EPSILON)
 end
 
 -- Has the client re-anchored its own bar out from under us?
@@ -2270,15 +2264,8 @@ end
 -- Testing point 1 alone cannot see that, and reports no drift for a bar that
 -- has visibly moved.
 local function NativeDrifted()
-  local okCount, count = pcall(nativeFrame.GetNumPoints, nativeFrame)
-  if okCount and tonumber(count) and tonumber(count) ~= 1 then return true end
-
-  local point, relative, relativePoint, x, y = U.GetFramePoint(nativeFrame, 1)
-  if type(point) ~= "string" then return true end
-  if relative ~= nativeMoverAnchor then return true end
-  if point ~= "CENTER" or relativePoint ~= "CENTER" then return true end
-  if math.abs(x) > DRIFT_EPSILON or math.abs(y) > DRIFT_EPSILON then return true end
-  return false
+  return not U.FramePointMatches(nativeFrame, "CENTER", nativeMoverAnchor,
+                                 "CENTER", 0, 0, DRIFT_EPSILON)
 end
 
 -- Centre-on-centre needs neither frame to know how wide the other is, which is
@@ -2380,8 +2367,8 @@ local function SetupNativeMover()
   U.RegisterEvent("SPELLCAST_START", refresh)
   U.RegisterEvent("SPELLCAST_CHANNEL_START", refresh)
 
-  -- One anchor read twice a second against a frame that rarely moves. The
-  -- modern bar's per-frame tick is not registered in this mode at all.
+  -- Low-frequency measured-geometry repair. The modern bar's per-frame tick
+  -- is not registered in this mode at all.
   U.RegisterUpdate("castbar.anchor", 0.5, ApplyNativeAnchor)
 end
 

@@ -90,6 +90,7 @@ local state = {
   dragCount = 0,
   swallowedClicks = 0,
   arrowScaled = 0,
+  openingFrames = nil,
   levels = {},
 }
 ZOOM.state = state
@@ -254,14 +255,30 @@ local function Layout()
   Apply()
 end
 
+-- Fullscreen opens with native marker anchors still carrying their XML
+-- defaults. Keep the zoomed canvas logically visible but transparent long
+-- enough for the client's own OnUpdate to place every marker. Hiding it would
+-- suppress those native visibility checks, so alpha is used instead.
+local function BeginOpeningGate()
+  state.openingFrames = nil
+  pcall(state.viewport.SetAlpha, state.viewport, 1)
+  if not state.windowed then
+    state.openingFrames = 2
+    pcall(state.viewport.SetAlpha, state.viewport, 0)
+  end
+end
+
 local function OnMapShow()
   pcall(state.viewport.Show, state.viewport)
   Layout()
   Reset()
+  BeginOpeningGate()
 end
 
 local function OnMapHide()
   state.dragging = false
+  state.openingFrames = nil
+  pcall(state.viewport.SetAlpha, state.viewport, 1)
   pcall(state.viewport.Hide, state.viewport)
 end
 
@@ -273,6 +290,7 @@ local function WrapWindowToggle(name)
   setglobal(name, function(a1, a2, a3, a4)
     original(a1, a2, a3, a4)
     Layout()
+    BeginOpeningGate()
   end)
 end
 local function OnWheel()
@@ -345,8 +363,20 @@ local function OnDragStop()
 end
 
 local function DriverOnUpdate()
-  if not state.dragging then return end
   local map = U.G("WorldMapFrame")
+  if state.openingFrames then
+    if not map or not map:IsVisible() then
+      state.openingFrames = nil
+      pcall(state.viewport.SetAlpha, state.viewport, 1)
+    else
+      state.openingFrames = state.openingFrames - 1
+      if state.openingFrames <= 0 then
+        state.openingFrames = nil
+        pcall(state.viewport.SetAlpha, state.viewport, 1)
+      end
+    end
+  end
+  if not state.dragging then return end
   if not map or not map:IsVisible() then
     state.dragging = false
     return
@@ -570,4 +600,6 @@ function ZOOM:OnEnable()
   if area then U.WorldMapZoomPin(area, "TOP", "TOP", 0, -10) end
   state.mapKey = MapKey()
   Layout()
+  local map = U.G("WorldMapFrame")
+  if map and map.IsVisible and map:IsVisible() then BeginOpeningGate() end
 end

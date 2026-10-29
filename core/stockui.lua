@@ -1507,7 +1507,15 @@ function U.StyleStockCollapseButton(button, expandedSize)
       -- control that already works natively keeps working.
       if button.GetScript then
         local scriptOk, native = pcall(button.GetScript, button, "OnClick")
-        if scriptOk and native then pcall(native, button) end
+        if scriptOk and native then
+          -- Native XML handlers read the global `this`; calling their Lua
+          -- function directly does not retarget it to the host button.
+          local previous = U.G("this")
+          U.SetG("this", button)
+          local ok, err = pcall(native)
+          U.SetG("this", previous)
+          if not ok then error(err) end
+        end
       end
     end,
   })

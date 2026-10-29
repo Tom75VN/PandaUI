@@ -41,9 +41,11 @@
 --  * The rank bar is a plain texture cropped with SetTexCoord (a native
 --    StatusBar does not lay out its fill here, statusbar knowledge), and its
 --    DF-main mask is baked into the fill by tools/import_modern_wow_media.py.
---  * DF-main's profession tabs, favourites, link button and minimize button
---    are omitted: switching profession casts a spell, which is protected
---    here. Item icons still support native Shift-click chat links.
+--  * Learned professions are right-edge tabs, following Forever
+--    1.60.1.69913's RefreshRightTabs / CastProfessionSpell behavior with the
+--    stock 1.12 CastSpell click path. DF-main's favourites, link button and
+--    minimize button remain omitted. Item icons still support native
+--    Shift-click chat links.
 --
 -- Local budget: one table, per rules/pandaui.md.
 
@@ -2378,6 +2380,99 @@ function pw.Profession(win, name)
   return t.art[key or ""] or t.art.default, fx, icon or t.texture.missingIcon
 end
 
+function pw.PaintProfessionTab(tab)
+  if not tab or not tab.face then return end
+  local s = pw.Token().sideTab
+  pcall(tab.face.SetTexture, tab.face,
+        tab.puiActive and s.selectedFace or s.face)
+end
+
+function pw.SwitchProfession(win, tab)
+  if not tab or not tab.entry or tab.puiActive then return end
+  if type(U.OpenCraftingProfession) ~= "function" then return end
+  local ok, err = U.OpenCraftingProfession(tab.entry)
+  if not ok and err then U.Error("profession tab: " .. tostring(err)) end
+end
+
+function pw.BuildProfessionTab(win)
+  local s = pw.Token().sideTab
+  local tab = pw.Frame("Button", win.cover, s.level, true)
+  if not tab then return nil end
+  pcall(function()
+    tab:SetWidth(s.size)
+    tab:SetHeight(s.size)
+    tab:RegisterForClicks("LeftButtonUp")
+  end)
+
+  tab.face = pw.Texture(tab, "BACKGROUND", s.face)
+  if tab.face then
+    pcall(function()
+      tab.face:SetWidth(s.art)
+      tab.face:SetHeight(s.art)
+      tab.face:SetPoint("TOPLEFT", tab, "TOPLEFT", s.artX, s.artY)
+    end)
+  end
+  tab.icon = pw.Texture(tab, "ARTWORK", pw.Token().texture.missingIcon)
+  if tab.icon then
+    pcall(function()
+      tab.icon:SetWidth(s.icon)
+      tab.icon:SetHeight(s.icon)
+      tab.icon:SetPoint("CENTER", tab, "CENTER", 0, 0)
+      tab.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    end)
+  end
+  local highlight = pw.Texture(tab, "HIGHLIGHT",
+                               "Interface\\Buttons\\ButtonHilight-Square")
+  if highlight then
+    pcall(highlight.SetAllPoints, highlight, tab)
+    pcall(highlight.SetBlendMode, highlight, "ADD")
+    pcall(tab.SetHighlightTexture, tab, highlight)
+  end
+
+  tab:SetScript("OnClick", function() pw.SwitchProfession(win, tab) end)
+  tab:SetScript("OnEnter", function()
+    if tab.entry then
+      U.ShowWindowTooltip(tab, win.frame, tab.entry.name)
+    end
+  end)
+  tab:SetScript("OnLeave", function() U.HideWindowTooltip() end)
+  return tab
+end
+
+function pw.RefreshProfessionTabs(win, currentName)
+  win.professionTabs = win.professionTabs or {}
+  local entries = {}
+  if type(U.GetCraftingProfessionTabs) == "function" then
+    local ok, value = pcall(U.GetCraftingProfessionTabs)
+    if ok and type(value) == "table" then entries = value end
+  end
+  local s = pw.Token().sideTab
+  local i
+  for i = 1, table.getn(entries) do
+    local tab = win.professionTabs[i]
+    if not tab then
+      tab = pw.BuildProfessionTab(win)
+      win.professionTabs[i] = tab
+    end
+    if tab then
+      local entry = entries[i]
+      tab.entry = entry
+      tab.puiActive = entry.name == currentName
+      pcall(function()
+        tab:ClearAllPoints()
+        tab:SetPoint("TOPLEFT", win.frame, "TOPRIGHT",
+                     -s.rim - s.artX, -(s.top + (i - 1) * s.pitch))
+        tab.icon:SetTexture(entry.icon or pw.Token().texture.missingIcon)
+        tab:Show()
+      end)
+      pw.PaintProfessionTab(tab)
+    end
+  end
+  for i = table.getn(entries) + 1, table.getn(win.professionTabs) do
+    pw.SetShown(win.professionTabs[i], false)
+  end
+end
+
 -- The host's design size. Set once at build, the host came back at about the
 -- stock 512 height while the fixed-height panels kept 525 and ran out of the
 -- bottom rim (user screenshot, 2026-09-16); what resizes it natively is not
@@ -2403,6 +2498,7 @@ function pw.Refresh(win)
   local name, rank, maxRank = pw.Line(win)
   pw.SetText(win.title, name)
   pw.SetRank(win, rank, maxRank)
+  pw.RefreshProfessionTabs(win, name)
   local art, fx, icon = pw.Profession(win, name)
   if win.artPath ~= art and win.art then
     win.artPath = art

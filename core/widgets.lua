@@ -3338,10 +3338,8 @@ end
 -- The re-placement tick must never grab a tooltip that now belongs to someone
 -- else: a control hidden under the pointer (its window closed) gets no
 -- OnLeave, and the next world tooltip would otherwise be dragged onto this
--- guide. Ownership is judged from the anchor rather than from
--- GameTooltip:IsOwned, which has no runtime record here: once placed, a
--- tooltip that is no longer on this guide has been re-anchored by its new
--- owner.
+-- guide. Ownership is judged from measured geometry rather than GetPoint:
+-- this client can terminate inside GetPoint when a native relative is stale.
 function windowTip.StillOwned(state)
   local tip, owner = state.tip, state.owner
   local tipOk, tipShown = pcall(tip.IsVisible, tip)
@@ -3351,8 +3349,8 @@ function windowTip.StillOwned(state)
   if not ownerOk or not ownerShown then return false end
 
   if state.anchored then
-    local _, relative = U.GetFramePoint(tip)
-    if relative ~= windowTip.guide then return false end
+    if not U.FramePointMatches(tip, "BOTTOMLEFT", windowTip.guide,
+                               "BOTTOMLEFT", 0, 0) then return false end
   end
   return true
 end
@@ -3452,8 +3450,9 @@ function U.HideWindowTooltip()
   -- re-anchored since. Owner visibility is irrelevant here: the pointer has
   -- left the control, and the tooltip it opened goes with it.
   if not state or not state.tip then return end
-  local _, relative = U.GetFramePoint(state.tip)
-  if relative == windowTip.guide or not state.anchored then
+  if not state.anchored or
+     U.FramePointMatches(state.tip, "BOTTOMLEFT", windowTip.guide,
+                         "BOTTOMLEFT", 0, 0) then
     pcall(state.tip.Hide, state.tip)
   end
 end

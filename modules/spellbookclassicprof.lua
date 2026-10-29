@@ -175,6 +175,7 @@ function cp.Capture(index)
   local button = U.G(base)
   local name = U.G(base .. "SpellName")
   local sub = U.G(base .. "SubSpellName")
+  local highlight = U.G(base .. "Highlight")
   return {
     points = cp.CapturePoints(button),
     width = cp.Number(button, "GetWidth"),
@@ -183,6 +184,7 @@ function cp.Capture(index)
     nameWidth = cp.Number(name, "GetWidth"),
     subPoints = cp.CapturePoints(sub),
     subWidth = cp.Number(sub, "GetWidth"),
+    highlightAlpha = cp.Number(highlight, "GetAlpha") or 1,
   }
 end
 
@@ -273,6 +275,7 @@ function cp.Restore(index)
   local button = U.G(base)
   local name = U.G(base .. "SpellName")
   local sub = U.G(base .. "SubSpellName")
+  local highlight = U.G(base .. "Highlight")
   cp.RestorePoints(button, state.points)
   if button and state.width and state.height then
     pcall(button.SetWidth, button, state.width)
@@ -282,6 +285,9 @@ function cp.Restore(index)
   if name and state.nameWidth then pcall(name.SetWidth, name, state.nameWidth) end
   cp.RestorePoints(sub, state.subPoints)
   if sub and state.subWidth then pcall(sub.SetWidth, sub, state.subWidth) end
+  if highlight then
+    pcall(highlight.SetAlpha, highlight, state.highlightAlpha or 1)
+  end
 
   if state.plate then pcall(state.plate.Hide, state.plate) end
   cp.SetNativeSlot(index, true)
@@ -294,6 +300,17 @@ function cp.Sync(index)
   local placed = state and state.placed
   if not placed then return end
   local base = "SpellButton" .. index
+  local button = U.G(base)
+
+  -- These are the native Spellbook buttons, but the gold hover square and
+  -- missing-from-bars pulse are Spellbook-only states. Suppress both while
+  -- this host has moved the buttons onto Professions; Restore returns the
+  -- native highlight alpha, and the spell-page repaint restores any bar hint.
+  local highlight = U.G(base .. "Highlight")
+  if highlight then pcall(highlight.SetAlpha, highlight, 0) end
+  if type(U.ClassicSpellBookBarGlow) == "function" then
+    U.ClassicSpellBookBarGlow(button, false)
+  end
 
   if placed.plainSlot then cp.SetNativeSlot(index, false) end
   local sub = U.G(base .. "SubSpellName")

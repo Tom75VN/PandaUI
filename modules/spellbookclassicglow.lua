@@ -181,9 +181,14 @@ function U.ClassicSpellBookBarGlow(button, wanted)
 
   if not wanted then
     local mark = button.puiClassicBarGlow
-    if mark and glow.lit[mark] then
-      glow.lit[mark] = nil
-      glow.count = glow.count - 1
+    if mark then
+      if glow.lit[mark] then
+        glow.lit[mark] = nil
+        glow.count = glow.count - 1
+      end
+      -- Hide the regions even if the bookkeeping was already cleared. The
+      -- Professions host deliberately calls this while it owns reused native
+      -- SpellButtons, and no Spellbook-only pulse may survive on that page.
       glow.SetShown(mark, false)
     end
     return true

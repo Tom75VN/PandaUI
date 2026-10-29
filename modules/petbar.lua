@@ -546,12 +546,8 @@ local function ButtonsDrifted()
   local button = FirstButton()
   if not button or not slots[1] then return true end
 
-  local okCount, count = pcall(button.GetNumPoints, button)
-  if okCount and tonumber(count) and tonumber(count) ~= 1 then return true end
-
-  local point, relative, relativePoint = U.GetFramePoint(button, 1)
-  if relative ~= slots[1] then return true end
-  if point ~= "CENTER" or relativePoint ~= "CENTER" then return true end
+  if not U.FramePointMatches(button, "CENTER", slots[1], "CENTER", 0, 0,
+                             DRIFT_EPSILON) then return true end
 
   local okScale, scale = pcall(button.GetScale, button)
   if okScale and Number(scale) and math.abs(scale - appliedLayout.scale) > 0.01 then
@@ -584,14 +580,9 @@ local function RestoreButtons()
 end
 
 local function AnchorDrifted(frame, position)
-  local point, relative, relativePoint, x, y = U.ReadFramePoint(frame)
-  if type(point) ~= "string" then return true end
-  if relative and relative ~= UIParent then return true end
-  if point ~= position.point then return true end
-  if relativePoint ~= (position.relativePoint or position.point) then return true end
-  if math.abs(x - (tonumber(position.x) or 0)) > DRIFT_EPSILON then return true end
-  if math.abs(y - (tonumber(position.y) or 0)) > DRIFT_EPSILON then return true end
-  return false
+  return not U.FramePointMatches(frame, position.point, UIParent,
+                                 position.relativePoint or position.point,
+                                 position.x, position.y, DRIFT_EPSILON)
 end
 
 -- Is the native bar still sitting on our anchor, or has the client re-anchored
@@ -600,15 +591,8 @@ end
 -- point 1 on its mover while another point displaced it. Use the same guarded
 -- count check here; point 1 alone cannot detect that case.
 local function NativeDrifted()
-  local okCount, count = pcall(native.GetNumPoints, native)
-  if okCount and tonumber(count) and tonumber(count) ~= 1 then return true end
-
-  local point, relative, relativePoint, x, y = U.GetFramePoint(native, 1)
-  if type(point) ~= "string" then return true end
-  if relative ~= anchor then return true end
-  if point ~= "CENTER" or relativePoint ~= "CENTER" then return true end
-  if math.abs(x) > DRIFT_EPSILON or math.abs(y) > DRIFT_EPSILON then return true end
-  return false
+  return not U.FramePointMatches(native, "CENTER", anchor, "CENTER",
+                                 0, 0, DRIFT_EPSILON)
 end
 
 -- Size-agnostic on purpose: centre-on-centre needs neither frame to know how

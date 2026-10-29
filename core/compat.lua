@@ -667,6 +667,12 @@ function U.ApplyFramePoint(frame, position)
     frame:SetPoint(position.point, UIParent, relativePoint,
                    tonumber(position.x) or 0, tonumber(position.y) or 0)
   end)
+  if ok then
+    frame.puiKnownPoint = position.point
+    frame.puiKnownRelativePoint = relativePoint
+    frame.puiKnownX = tonumber(position.x) or 0
+    frame.puiKnownY = tonumber(position.y) or 0
+  end
   return ok
 end
 

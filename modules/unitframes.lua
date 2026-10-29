@@ -1632,18 +1632,7 @@ end
 -- while point 1 still looks like ours.
 function classicNative.TargetDrifted(anchor, native)
   if not anchor or not native then return false end
-
-  if type(native.GetNumPoints) == "function" then
-    local okCount, count = pcall(native.GetNumPoints, native)
-    if okCount and tonumber(count) and tonumber(count) ~= 1 then return true end
-  end
-
-  local point, relative, relativePoint, x, y = U.GetFramePoint(native, 1)
-  if type(point) ~= "string" then return true end
-  if relative ~= anchor then return true end
-  if point ~= "CENTER" or relativePoint ~= "CENTER" then return true end
-  if math.abs(x) > 0.5 or math.abs(y) > 0.5 then return true end
-  return false
+  return not U.FramePointMatches(native, "CENTER", anchor, "CENTER", 0, 0, 0.5)
 end
 
 -- The client occasionally leaves its native TargetFrame shown after the
@@ -5418,9 +5407,9 @@ local function ShowUnitMenu(frame, unit)
   pcall(toggle, 1, nil, dropdown, "cursor")
 end
 
--- Whisper entry for the party member popup, under every theme: the modern
--- frames open PartyMemberFrameNDropDown above, and classic-wow's native party
--- frames open the same menu, so both read UnitPopupMenus.PARTY.
+-- Whisper entry for party and raid member popups, under every theme: the
+-- modern frames open PartyMemberFrameNDropDown above, classic-wow's native
+-- party frames open the same menu, and raidframes.lua reads UnitPopupMenus.RAID.
 --
 -- The user reported this client's PARTY menu has no whisper. query_compat.py
 -- has no record for UnitPopupMenus/UnitPopupButtons/UnitPopup_OnClick or
@@ -5452,32 +5441,44 @@ function unitMouse.OpenWhisper(name)
     pcall(openChat, "/w " .. name .. " ")
     return
   end
-  U.Debug("party whisper: no native chat-open function on this client")
+  U.Debug("popup whisper: no native chat-open function on this client")
 end
 
-function unitMouse.AddPartyWhisper()
+function unitMouse.AddPopupWhisper()
   if unitMouse.whisperAdded then return end
   local buttons = U.G("UnitPopupButtons")
   local menus = U.G("UnitPopupMenus")
   local party = type(menus) == "table" and menus.PARTY or nil
-  if type(buttons) ~= "table" or type(party) ~= "table" then
-    U.Debug("party whisper: UnitPopupMenus.PARTY unavailable")
+  local raid = type(menus) == "table" and menus.RAID or nil
+  if type(buttons) ~= "table" or type(party) ~= "table" or
+     type(raid) ~= "table" then
+    U.Debug("popup whisper: UnitPopupMenus.PARTY/RAID unavailable")
     return
   end
   unitMouse.whisperAdded = true
 
-  local i
-  for i = 1, table.getn(party) do
-    if party[i] == "WHISPER" or party[i] == unitMouse.WHISPER_KEY then
-      U.Debug("party whisper: PARTY menu already lists " .. party[i])
-      return
+  local popupMenus = { party, raid }
+  local added = false
+  local i, j
+  for i = 1, table.getn(popupMenus) do
+    local menu = popupMenus[i]
+    local present = false
+    for j = 1, table.getn(menu) do
+      if menu[j] == "WHISPER" or menu[j] == unitMouse.WHISPER_KEY then
+        present = true
+        break
+      end
+    end
+    if not present then
+      table.insert(menu, 1, unitMouse.WHISPER_KEY)
+      added = true
     end
   end
 
   local text = U.G("WHISPER")
   if type(text) ~= "string" or text == "" then text = U.L("UF_MENU_WHISPER") end
   buttons[unitMouse.WHISPER_KEY] = { text = text, dist = 0 }
-  table.insert(party, 1, unitMouse.WHISPER_KEY)
+  if not added then return end
 
   if not U.PostHookGlobal("UnitPopup_OnClick", function()
     local button = U.G("this")
@@ -5485,7 +5486,7 @@ function unitMouse.AddPartyWhisper()
     local name = unitMouse.WhisperTargetName()
     if name then unitMouse.OpenWhisper(name) end
   end) then
-    U.Debug("party whisper: UnitPopup_OnClick unavailable")
+    U.Debug("popup whisper: UnitPopup_OnClick unavailable")
   end
 end
 
@@ -7194,7 +7195,10 @@ function UF:OnEnable()
                             PartyConfig().partyRaidStyle and true or false
   SuppressStockFrames(not nativeChrome or modernUnits,
                       not classicNative.UsesNative("party1"))
-  unitMouse.AddPartyWhisper()
+  if U.Dropdown and type(U.Dropdown.EnsureMenuSkin) == "function" then
+    U.Dropdown.EnsureMenuSkin()
+  end
+  unitMouse.AddPopupWhisper()
 
   frames[PARTY_ANCHOR] = BuildPartyAnchor()
 

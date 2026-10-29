@@ -535,26 +535,16 @@ local function SecondOffset()
 end
 
 local function AnchorDrifted(frame, position)
-  local point, relative, relativePoint, x, y = U.ReadFramePoint(frame)
-  if type(point) ~= "string" then return true end
-  if relative and relative ~= UIParent then return true end
-  if point ~= position.point then return true end
-  if relativePoint ~= (position.relativePoint or position.point) then return true end
-  if math.abs(x - (tonumber(position.x) or 0)) > DRIFT_EPSILON then return true end
-  if math.abs(y - (tonumber(position.y) or 0)) > DRIFT_EPSILON then return true end
-  return false
+  return not U.FramePointMatches(frame, position.point, UIParent,
+                                 position.relativePoint or position.point,
+                                 position.x, position.y, DRIFT_EPSILON)
 end
 
 -- Is the native frame still sitting on our anchor, or has the client
 -- re-anchored it (an aura gained or lost, a zone-in)?
 local function NativeDrifted(frame, point, offsetX, offsetY)
-  local at, relative, relativePoint, x, y = U.GetFramePoint(frame, 1)
-  if type(at) ~= "string" then return true end
-  if relative ~= anchor then return true end
-  if at ~= point or relativePoint ~= rootPoint then return true end
-  if math.abs(x - offsetX) > DRIFT_EPSILON then return true end
-  if math.abs(y - offsetY) > DRIFT_EPSILON then return true end
-  return false
+  return not U.FramePointMatches(frame, point, anchor, rootPoint,
+                                 offsetX, offsetY, DRIFT_EPSILON)
 end
 
 -- Corner-on-corner rather than centre-on-centre: the icons grow away from the
@@ -704,10 +694,8 @@ function debuffs.Drive()
   if not button then return end
 
   local point = debuffs.point
-  local at, relative, relativePoint, x, y = U.GetFramePoint(button, 1)
-  if at == point and relative == debuffs.anchor and
-     relativePoint == point and math.abs((x or 0)) <= DRIFT_EPSILON and
-     math.abs((y or 0)) <= DRIFT_EPSILON then
+  if U.FramePointMatches(button, point, debuffs.anchor, point,
+                         0, 0, DRIFT_EPSILON) then
     return
   end
 
@@ -1240,7 +1228,7 @@ function BF:OnEnable()
 
   U.Debug("buffframe mover registered on " .. tostring(rootName))
 
-  -- One anchor read per tick against frames that move rarely.
+  -- Low-frequency measured-geometry repair; never read native anchor objects.
   U.RegisterUpdate("buffframe.anchor", 1.0, Apply)
 end
 

@@ -2733,6 +2733,7 @@ M.modernWow.dropdown = {
   fillInset = 3,
   fill = { 0.02, 0.02, 0.02, 0.92 },
   listFill = { 0.02, 0.02, 0.02, 0.97 },
+  unitPopupListFill = { 0.02, 0.02, 0.02, 0.80 },
   arrowColor = { 1.00, 0.82, 0.00, 1.00 },
   -- The arrow glyph's offset from the control's right edge (the flat
   -- component uses -4; user asked 3 further left, 2026-09-19).
@@ -2836,6 +2837,15 @@ M.modernWow.professions = {
   title = { y = 7 },
   close = { size = 24, x = -1, y = 0 },
   drag = { headerHeight = 60, headerInset = 40 },
+  -- Forever's learned professions run vertically down the window's right
+  -- edge. Reuse the existing Modern WoW skill-line side-tab face; only its
+  -- behavior and placement come from Forever 1.60.1.69913.
+  sideTab = {
+    top = 78, pitch = 46, size = 32, icon = 28, level = 8,
+    art = 64, artX = -3, artY = 11, rim = 4,
+    face = M.modernWow.spellBook.texture.skillTab,
+    selectedFace = M.modernWow.spellBook.texture.skillTabGlow,
+  },
   -- Frame levels above the host window: the cover hides every native child
   -- of the host, the rim draws the metal over the panels, and the drag handle
   -- and close button stay above both.
@@ -5683,6 +5693,11 @@ M.professions = {
   close = { x = -6, y = -6 },
   drag = { headerHeight = 44, inset = 28 },
   levels = { cover = 10, content = 1, handle = 10, close = 22 },
+
+  -- Learned-profession tabs hang from the right rim, matching Forever's
+  -- vertical behavior while staying in the flat Modern component family.
+  sideTab = { top = 54, pitch = 38, size = 34, icon = 30,
+              overlap = 1, level = 4 },
 
   professionIcon = { x = 10, y = 9, size = 28, crop = { 0.08, 0.92, 0.08, 0.92 } },
   rank = { width = 250, height = 8, y = 31 },

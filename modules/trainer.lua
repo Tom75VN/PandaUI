@@ -30,6 +30,13 @@ local function G(name)
   return U.G(name)
 end
 
+local function TrainerFrameShown()
+  local trainer = frame or G("ClassTrainerFrame")
+  if not trainer or not trainer.IsShown then return false end
+  local ok, shown = pcall(trainer.IsShown, trainer)
+  return ok and shown and true or false
+end
+
 local function SetTrainerFont(object, size, color)
   U.SetStockFont(object, size or M.fontSize.normal, color or WHITE)
 end
@@ -113,6 +120,7 @@ local function SetTextureCell(texture, path, coords)
 end
 
 local function TrainerSelection()
+  if not TrainerFrameShown() then return nil end
   local getSelection = G("GetTrainerSelectionIndex")
   if type(getSelection) == "function" then
     local ok, selected = pcall(getSelection)
@@ -145,7 +153,14 @@ end
 function rows.Call(name, a, b)
   local fn = G(name)
   if type(fn) ~= "function" then return nil end
-  local ok, r1, r2, r3, r4 = pcall(fn, a, b)
+  local ok, r1, r2, r3, r4
+  if b ~= nil then
+    ok, r1, r2, r3, r4 = pcall(fn, a, b)
+  elseif a ~= nil then
+    ok, r1, r2, r3, r4 = pcall(fn, a)
+  else
+    ok, r1, r2, r3, r4 = pcall(fn)
+  end
   if ok then return r1, r2, r3, r4 end
   return nil
 end
@@ -214,6 +229,7 @@ end
 -- (knowledge.json / trainer.out_of_range_service_index_crash); pcall cannot
 -- catch it, so every service read goes through this check.
 function rows.RowId(row)
+  if not TrainerFrameShown() then return nil end
   if not row or not row.GetID then return nil end
   local ok, value = pcall(row.GetID, row)
   local id = ok and tonumber(value) or nil
@@ -368,7 +384,7 @@ function rows.Refresh(row)
     state.money:Hide()
   end
 
-  local selected = TrainerSelection()
+  local selected = id and TrainerSelection() or nil
   if selected and selected == id then state.selected:Show()
   else state.selected:Hide() end
   if state.hovered then state.highlight:Show()
@@ -677,12 +693,15 @@ local function StyleSkillIcon()
   U.StyleStockButton(icon)
 
   U.PostHookGlobal("ClassTrainer_SetSelection", function()
-    local textureOk, texture = pcall(icon.GetNormalTexture, icon)
-    if textureOk and texture then
-      pcall(texture.Show, texture)
-      pcall(texture.SetAlpha, texture, 1)
-      pcall(texture.SetTexCoord, texture, 0.08, 0.92, 0.08, 0.92)
-    end
+    U.DeferOnce("trainer:icon", function()
+      if not TrainerFrameShown() then return end
+      local textureOk, texture = pcall(icon.GetNormalTexture, icon)
+      if textureOk and texture then
+        pcall(texture.Show, texture)
+        pcall(texture.SetAlpha, texture, 1)
+        pcall(texture.SetTexCoord, texture, 0.08, 0.92, 0.08, 0.92)
+      end
+    end)
   end)
 end
 
@@ -993,6 +1012,7 @@ local function SyncModernButtons()
 end
 
 local function Reapply()
+  if not TrainerFrameShown() then return end
   if not useModernWow then U.StripStockTextures(frame) end
   ReapplyAllText()
   if useModernWow then
@@ -1125,6 +1145,7 @@ local function BuildFrame()
   -- are hooked (a missing global fails closed), and the list's own events
   -- and scroll add one deferred pass after whatever the client ran.
   local function AfterUpdate()
+    if not TrainerFrameShown() then return end
     ReapplyAllText()
     if useModernWow then
       BuildModernLayout()
@@ -1132,23 +1153,23 @@ local function BuildFrame()
     end
   end
   local function AfterUpdateSettled()
-    if not frame or not frame.IsShown then return end
-    local ok, shown = pcall(frame.IsShown, frame)
-    if ok and shown then U.DeferOnce("trainer:update", AfterUpdate) end
+    U.DeferOnce("trainer:update", AfterUpdate)
   end
-  U.PostHookGlobal("ClassTrainer_Update", AfterUpdate)
-  U.PostHookGlobal("ClassTrainerFrame_Update", AfterUpdate)
+  U.PostHookGlobal("ClassTrainer_Update", AfterUpdateSettled)
+  U.PostHookGlobal("ClassTrainerFrame_Update", AfterUpdateSettled)
   U.RegisterEvent("TRAINER_UPDATE", AfterUpdateSettled)
   local listBar = G("ClassTrainerListScrollFrameScrollBar")
   if useModernWow and listBar then
     U.PostHookScript(listBar, "OnValueChanged", AfterUpdateSettled)
   end
-  U.PostHookGlobal("ClassTrainer_SetSelection", function()
-    if useModernWow then StyleSkillRows() end
-    SyncModernButtons()
-  end)
+  U.PostHookGlobal("ClassTrainer_SetSelection", AfterUpdateSettled)
 
-  U.PostHookScript(frame, "OnShow", Reapply)
+  U.PostHookScript(frame, "OnShow", AfterUpdateSettled)
+  U.RegisterEvent("TRAINER_CLOSED", function()
+    U.UnregisterUpdate("trainer:update")
+    U.UnregisterUpdate("trainer:rowclick")
+    U.UnregisterUpdate("trainer:icon")
+  end)
 
   if frame.IsShown then
     local ok, shown = pcall(frame.IsShown, frame)
@@ -1170,20 +1191,29 @@ end
 -- created on first open rather than on addon load. Both listeners are torn
 -- down once BuildFrame succeeds once.
 local pendingEvents = { "ADDON_LOADED", "TRAINER_SHOW" }
+local buildQueued = false
 
 function U.ModernWowTrainerActive()
   return modernBuilt
 end
 
+-- ADDON_LOADED runs inside UIParentLoadAddOn, before ClassTrainerFrame_Show
+-- finishes native setup. Wait for the event chain to unwind before touching
+-- trainer widgets or APIs (trainer.out_of_range_service_index_crash).
 local function TryBuild()
-  if BuildFrame() then
-    local i
-    for i = 1, table.getn(pendingEvents) do
-      U.UnregisterEvent(pendingEvents[i], TryBuild)
+  if buildQueued or not G("ClassTrainerFrame") then return false end
+  buildQueued = true
+  U.DeferOnce("trainer:build", function()
+    buildQueued = false
+    if not TrainerFrameShown() then return end
+    if BuildFrame() then
+      local i
+      for i = 1, table.getn(pendingEvents) do
+        U.UnregisterEvent(pendingEvents[i], TryBuild)
+      end
     end
-    return true
-  end
-  return false
+  end)
+  return true
 end
 
 function TR:OnEnable()
@@ -1192,8 +1222,7 @@ function TR:OnEnable()
                  type(U.ModernWowSurfaceEnabled) == "function" and
                  U.ModernWowSurfaceEnabled("trainer")
   if U.ThemeStyleUsesClassicInteractionChrome() and not useModernWow then return end
-  if TryBuild() then return end
-
   U.RegisterEvent("ADDON_LOADED", TryBuild)
   U.RegisterEvent("TRAINER_SHOW", TryBuild)
+  TryBuild()
 end

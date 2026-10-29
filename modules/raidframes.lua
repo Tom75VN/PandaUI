@@ -660,6 +660,39 @@ end
 -- FrameXML on this client (query_api.py); the menu's own behaviour is
 -- WORKING_SOURCE, not runtime-verified.
 -- ---------------------------------------------------------------------------
+local PREVIEW_RAID_MENU = {
+  "PANDAUI_WHISPER", "RAID_LEADER", "RAID_PROMOTE", "RAID_DEMOTE",
+  "RAID_REMOVE", "CANCEL",
+}
+
+local function PreviewMenuNoop()
+end
+
+-- Native RAID buttons depend on a real roster and disappear while solo.
+-- Test management actions stay harmless; Whisper opens the fake member tell.
+local function ShowPreviewRaidMenu(dropdown)
+  local add = Fn("UIDropDownMenu_AddButton")
+  local popupClick = Fn("UnitPopup_OnClick")
+  local buttons = U.G("UnitPopupButtons")
+  if not add or type(buttons) ~= "table" then return end
+
+  pcall(add, { text = dropdown.name or "", isTitle = 1, notCheckable = 1 })
+  local i
+  for i = 1, table.getn(PREVIEW_RAID_MENU) do
+    local key = PREVIEW_RAID_MENU[i]
+    local button = buttons[key]
+    if button and button.text then
+      pcall(add, {
+        text = button.text,
+        value = key,
+        notCheckable = 1,
+        func = key == "PANDAUI_WHISPER" and popupClick or PreviewMenuNoop,
+      })
+    end
+  end
+  Call("PlaySound", "igMainMenuOpen")
+end
+
 local function MenuDropDown()
   if rf.dropdown ~= nil then return rf.dropdown or nil end
 
@@ -672,6 +705,10 @@ local function MenuDropDown()
   end
 
   pcall(init, dropdown, function()
+    if dropdown.previewRaid then
+      ShowPreviewRaidMenu(dropdown)
+      return
+    end
     local show = Fn("UnitPopup_ShowMenu")
     if not show or not dropdown.unit then return end
     local which = "RAID"
@@ -693,7 +730,8 @@ ShowUnitMenu = function(cell)
   local toggle = Fn("ToggleDropDownMenu")
   if not dropdown or not toggle then return end
   dropdown.unit = cell.unit
-  dropdown.name = Call("UnitName", cell.unit)
+  dropdown.previewRaid = cell.fake and true or nil
+  dropdown.name = cell.fake and cell.fake.name or Call("UnitName", cell.unit)
   dropdown.id = cell.raidIndex
   pcall(toggle, 1, nil, dropdown, "cursor")
 end

@@ -1804,9 +1804,7 @@ end
 function placement.NoteOverflow(tooltip)
   if not placement.config or not placement.config.followCursor then return end
   if not placement.cursor or not placement.cursorX then return end
-
-  local point, relative = U.GetFramePoint(tooltip)
-  if relative ~= placement.cursor or point ~= "BOTTOMLEFT" then return end
+  if placement.currentTarget ~= placement.cursor then return end
 
   local ok, uiLeft, uiBottom, left, bottom, width, height = pcall(function()
     return UIParent:GetLeft(), UIParent:GetBottom(),
@@ -1966,22 +1964,14 @@ function placement.Apply(tooltip)
   -- before rendering; applying our point more often cannot fix it. Exclude the
   -- hovered native button entirely so the two placement systems never compete.
   if placement.NativeActionButtonHovered() then
+    placement.currentTarget = nil
     placement.SetWorldLayer(tooltip, false)
     return
   end
 
   local ok, anchorType = pcall(tooltip.GetAnchorType, tooltip)
   if not ok or anchorType ~= "ANCHOR_NONE" then
-    placement.SetWorldLayer(tooltip, false)
-    return
-  end
-
-  local point, relative, relativePoint, x, y = U.GetFramePoint(tooltip)
-  if relative ~= placement.frame and relative ~= placement.cursor and
-     (relative ~= UIParent or point ~= "BOTTOMRIGHT" or
-      relativePoint ~= "BOTTOMRIGHT") then
-    -- Only take over the default screen-corner anchor. Item/button tooltips
-    -- with an explicit owner-relative or cursor position keep that placement.
+    placement.currentTarget = nil
     placement.SetWorldLayer(tooltip, false)
     return
   end
@@ -2019,8 +2009,8 @@ function placement.Apply(tooltip)
       if cursor then target, targetPoint = cursor, "BOTTOMLEFT" end
     end
   end
-  if relative == target and point == targetPoint and relativePoint == targetPoint and
-     x == 0 and y == 0 then
+  if placement.currentTarget == target and
+     U.FramePointMatches(tooltip, targetPoint, target, targetPoint, 0, 0) then
     placement.applying = false
     return
   end
@@ -2029,7 +2019,12 @@ function placement.Apply(tooltip)
     tooltip:SetPoint(targetPoint, target, targetPoint, 0, 0)
   end)
   placement.applying = false
-  if not placed then U.Debug("tooltip anchor: " .. tostring(err)) end
+  if placed then
+    placement.currentTarget = target
+  else
+    placement.currentTarget = nil
+    U.Debug("tooltip anchor: " .. tostring(err))
+  end
 end
 
 function placement.SetCursorFadeAlpha(tooltip, alpha)
@@ -2087,10 +2082,8 @@ function placement.AccelerateCursorFade(tooltip)
     return
   end
 
-  -- Only the default world tooltip is moved onto this guide. Explicitly
-  -- owner-anchored item and button tooltips keep the native fade unchanged.
-  local _, relative = U.GetFramePoint(tooltip)
-  if relative ~= placement.cursor then
+  -- Only a world tooltip we placed on the cursor guide gets this fade.
+  if placement.currentTarget ~= placement.cursor then
     if placement.fadeStartedAt then placement.ResetCursorFade(tooltip) end
     return
   end
@@ -2347,6 +2340,7 @@ local function InstallTriggers()
   -- window before the 0.10s backstop pass notices the frame went away.
   U.PostHookScript(tooltip, "OnHide", function()
     U.ClearTooltipItemName()
+    placement.currentTarget = nil
     placement.fadeStartedAt = nil
     placement.fadeHidePending = nil
     healthFillAlpha = 1

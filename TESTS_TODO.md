@@ -4,6 +4,24 @@ In-game tests still owed on OctoWoW. Tick an item once it passes. Report a
 failure with its number and what you saw (exact error text if any); every
 result is recorded in `knowledge.json` (`USER_CONFIRMED_INGAME`).
 
+## Fullscreen world-map ping with zoom (broken 2026-10-29)
+
+Code: `modules/worldmapzoom.lua`, `modules/playerarrow.lua`. Knowledge records:
+`map.worldmap_open_ping_detached_from_player_arrow` and
+`map.worldmap_zoom_scaled_content_viewport`.
+
+Opening the fullscreen world map with PandaUI zoom enabled draws the
+player-position ping away from `PandaUIPlayerArrowWorldMap`. Disabling only the
+zoom restores correct alignment, so the zoom coordinate handling must be
+redesigned without removing wheel zoom, panning or the custom player cursor.
+Windowed-map and minimap ping placement must remain unchanged.
+
+- [ ] WM1. Open the fullscreen world map: the ping appears exactly on the custom player cursor immediately.
+- [ ] WM2. Zoom in and out at several cursor positions: ping and player cursor remain aligned.
+- [ ] WM3. Pan at zoom levels 1.5–4: ping and player cursor move together without drift.
+- [ ] WM4. Minimize and maximize the map: alignment remains correct and the client does not crash.
+- [ ] WM5. Confirm windowed-map zoom, minimap pings and native map clicks remain unchanged.
+
 ## Nameplate Tank Mode (coded 2026-10-28, not yet tested)
 
 Code: `modules/nameplates.lua` (`style.TankKey`), `modules/nameplatesettings.lua`.

@@ -1594,6 +1594,84 @@ function pm.ProfessionIcon(win, name)
   return pm.Token().texture.missingIcon
 end
 
+function pm.PaintProfessionTab(tab)
+  if not tab or tab.puiHovered then return end
+  U.SetBorderColor(tab, M.Unpack(tab.puiActive and M.color.accent or
+                                M.color.border))
+end
+
+function pm.SwitchProfession(win, tab)
+  if not tab or not tab.entry or tab.puiActive then return end
+  if type(U.OpenCraftingProfession) ~= "function" then return end
+  local ok, err = U.OpenCraftingProfession(tab.entry)
+  if not ok and err then U.Error("profession tab: " .. tostring(err)) end
+end
+
+function pm.BuildProfessionTab(win)
+  local s = pm.Token().sideTab
+  local tab
+  tab = U.CreateIconButton(win.cover, {
+    size = s.size,
+    texture = pm.Token().texture.missingIcon,
+    onClick = function() pm.SwitchProfession(win, tab) end,
+  })
+  if not tab then return nil end
+  pcall(tab.SetFrameLevel, tab, pm.Level(win.cover) + s.level)
+  if tab.icon then
+    pcall(function()
+      tab.icon:ClearAllPoints()
+      tab.icon:SetWidth(s.icon)
+      tab.icon:SetHeight(s.icon)
+      tab.icon:SetPoint("CENTER", tab, "CENTER", 0, 0)
+    end)
+  end
+  tab:SetScript("OnEnter", function()
+    tab.puiHovered = true
+    U.SetBorderColor(tab, M.Unpack(M.color.moverEdge))
+    if tab.entry then U.ShowWindowTooltip(tab, win.frame, tab.entry.name) end
+  end)
+  tab:SetScript("OnLeave", function()
+    tab.puiHovered = nil
+    pm.PaintProfessionTab(tab)
+    U.HideWindowTooltip()
+  end)
+  return tab
+end
+
+function pm.RefreshProfessionTabs(win, currentName)
+  win.professionTabs = win.professionTabs or {}
+  local entries = {}
+  if type(U.GetCraftingProfessionTabs) == "function" then
+    local ok, value = pcall(U.GetCraftingProfessionTabs)
+    if ok and type(value) == "table" then entries = value end
+  end
+  local s = pm.Token().sideTab
+  local i
+  for i = 1, table.getn(entries) do
+    local tab = win.professionTabs[i]
+    if not tab then
+      tab = pm.BuildProfessionTab(win)
+      win.professionTabs[i] = tab
+    end
+    if tab then
+      local entry = entries[i]
+      tab.entry = entry
+      tab.puiActive = entry.name == currentName
+      pcall(function()
+        tab:ClearAllPoints()
+        tab:SetPoint("TOPLEFT", win.frame, "TOPRIGHT", -s.overlap,
+                     -(s.top + (i - 1) * s.pitch))
+        tab.icon:SetTexture(entry.icon or pm.Token().texture.missingIcon)
+        tab:Show()
+      end)
+      pm.PaintProfessionTab(tab)
+    end
+  end
+  for i = table.getn(entries) + 1, table.getn(win.professionTabs) do
+    pm.SetShown(win.professionTabs[i], false)
+  end
+end
+
 function pm.Refresh(win)
   if not win.built or not pm.Shown(win.frame) then return end
   pm.ApplySize(win)
@@ -1601,6 +1679,7 @@ function pm.Refresh(win)
   local name, rank, maxRank = pm.Line(win)
   pm.SetText(win.title, name)
   pm.SetRank(win, rank, maxRank)
+  pm.RefreshProfessionTabs(win, name)
   if win.professionIcon then
     pcall(win.professionIcon.SetTexture, win.professionIcon,
           pm.ProfessionIcon(win, name))

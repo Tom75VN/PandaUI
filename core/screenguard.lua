@@ -8,8 +8,8 @@
 --     660-high UI, the Spellbook on the same screen) is scaled down until it
 --     fits. A clamp alone cannot help there: one edge always stays off screen.
 --   * Clamp. A frame whose rectangle leaves the screen is shifted back by the
---     overshoot. Its own anchor point is kept, so a bottom-pinned bag still
---     grows upwards and a TOPLEFT list still grows downwards.
+--     overshoot. PandaUI-known anchor points are kept; unknown native anchors
+--     are re-expressed safely as TOPLEFT without calling GetPoint.
 --
 -- Callers:
 --
@@ -243,6 +243,44 @@ local function Read(frame, method)
   return ok and tonumber(value) or nil
 end
 
+-- Tests one known anchor from measured rectangles, without Frame:GetPoint.
+-- GetPoint can dereference a stale native relative and terminate the client
+-- (knowledge.json / frames.getpoint_after_native_move_access_violation), so
+-- live HUD polling must never use it merely to detect anchor drift.
+local function PointCoordinate(frame, point)
+  local left, right = Read(frame, "GetLeft"), Read(frame, "GetRight")
+  local bottom, top = Read(frame, "GetBottom"), Read(frame, "GetTop")
+  if not left or not right or not bottom or not top then return nil end
+  local x, y = (left + right) / 2, (bottom + top) / 2
+  if string.find(point, "LEFT", 1, true) then x = left
+  elseif string.find(point, "RIGHT", 1, true) then x = right end
+  if string.find(point, "BOTTOM", 1, true) then y = bottom
+  elseif string.find(point, "TOP", 1, true) then y = top end
+  local ratio = U.FrameUIRatio(frame)
+  return x * ratio, y * ratio
+end
+
+function U.FramePointMatches(frame, point, relative, relativePoint, x, y, epsilon)
+  if not frame or type(point) ~= "string" then return false end
+  if type(relative) == "string" then relative = U.G(relative) end
+  relative = relative or UIParent
+  relativePoint = relativePoint or point
+
+  local count = Read(frame, "GetNumPoints")
+  if count and count ~= 1 then return false end
+
+  local frameX, frameY = PointCoordinate(frame, point)
+  local relativeX, relativeY = PointCoordinate(relative, relativePoint)
+  if not frameX or not relativeX then return false end
+
+  local ratio = U.FrameUIRatio(frame)
+  local tolerance = (tonumber(epsilon) or sg.OFFSET_EPSILON) * ratio
+  local expectedX = (tonumber(x) or 0) * ratio
+  local expectedY = (tonumber(y) or 0) * ratio
+  return math.abs((frameX - relativeX) - expectedX) <= tolerance and
+         math.abs((frameY - relativeY) - expectedY) <= tolerance
+end
+
 local function ParentIsUIParent(frame)
   if not frame.GetParent then return false end
   local ok, parent = pcall(frame.GetParent, frame)
@@ -262,14 +300,13 @@ local function OffsetsFor(point, relativePoint, left, bottom, width, height,
            screenHeight * PointFactor(relativePoint, "BOTTOM", "TOP")
 end
 
--- The point pair a frame is re-anchored through: its own when it has exactly
--- one UIParent point (keeps its growth direction), TOPLEFT otherwise. Only the
--- names are used; GetPoint's offsets are never trusted.
+-- The point pair a frame is re-anchored through: PandaUI's recorded point when
+-- it still has one anchor, TOPLEFT otherwise. GetPoint is deliberately absent.
 function sg.PointNames(frame)
-  local point, relative, relativePoint = U.GetFramePoint(frame, 1)
+  local point = frame and frame.puiKnownPoint
+  local relativePoint = frame and frame.puiKnownRelativePoint
   local count = Read(frame, "GetNumPoints")
-  if not point or (relative and relative ~= UIParent) or
-     (count and count ~= 1) then
+  if type(point) ~= "string" or (count and count ~= 1) then
     return "TOPLEFT", "TOPLEFT"
   end
   return point, relativePoint or point
@@ -298,6 +335,16 @@ end
 -- anchoring returns U.GetFramePoint unchanged, which on 1.12 is SetPoint's own
 -- tuple.
 function U.ReadFramePoint(frame)
+  local known = frame and frame.puiKnownPoint
+  if type(known) == "string" then
+    local relativePoint = frame.puiKnownRelativePoint or known
+    local x, y = tonumber(frame.puiKnownX) or 0, tonumber(frame.puiKnownY) or 0
+    if U.FramePointMatches(frame, known, UIParent, relativePoint, x, y) then
+      return known, UIParent, relativePoint, x, y
+    end
+    return nil
+  end
+
   local point, relative, relativePoint, x, y = U.GetFramePoint(frame, 1)
   if not point or (relative and relative ~= UIParent) then
     return point, relative, relativePoint, x, y
@@ -327,7 +374,7 @@ end
 --
 -- The new offsets come from the measured edges, not from GetPoint's offsets,
 -- so a frame carrying a second anchor point is corrected from where it is
--- drawn. Only the point NAMES are taken from GetPoint.
+-- drawn. Point names come only from PandaUI's recorded anchor metadata.
 function U.ClampFrameToScreen(frame)
   if not frame or not ParentIsUIParent(frame) then return false end
   local width, height = FrameSize(frame)
@@ -344,9 +391,11 @@ function U.ClampFrameToScreen(frame)
   local x, y = OffsetsFor(point, relativePoint, left + dx, bottom + dy,
                           width, height, screenWidth, screenHeight)
   local position = { point = point, relativePoint = relativePoint, x = x, y = y }
-  -- The anchor as it was, replayed verbatim if the correction fails.
-  local before = { U.GetFramePoint(frame, 1) }
-  local beforeCount = Read(frame, "GetNumPoints")
+  -- The measured rectangle as one UIParent point, replayed if correction fails.
+  local beforeX, beforeY = OffsetsFor("TOPLEFT", "TOPLEFT", left, bottom,
+                                     width, height, screenWidth, screenHeight)
+  local before = { point = "TOPLEFT", relativePoint = "TOPLEFT",
+                   x = beforeX, y = beforeY }
   if not U.ApplyFramePoint(frame, position) then return false end
 
   -- A frame that was sized by two anchors keeps the size it had. GetWidth and
@@ -359,24 +408,10 @@ function U.ClampFrameToScreen(frame)
     pcall(frame.SetHeight, frame, height)
   end
 
-  -- A correction that did not land on screen is undone rather than saved, so
-  -- a wrong assumption can never run away across sweeps. The undo replays the
-  -- old anchor itself: recomputing it from the edges reused the same wrong
-  -- screen extent and added the error again on every sweep (spellbookpos.v2,
-  -- 2026-10-15: y 92 -> 177 -> 262 ...).
+  -- A correction that did not land on screen is undone to its measured
+  -- rectangle rather than saved, so a wrong assumption cannot run away.
   if not OnScreen(frame) then
-    if before[1] and beforeCount == 1 then
-      pcall(function()
-        frame:ClearAllPoints()
-        frame:SetPoint(before[1], before[2] or UIParent, before[3] or before[1],
-                       before[4] or 0, before[5] or 0)
-      end)
-    else
-      local ox, oy = OffsetsFor(point, relativePoint, left, bottom, width, height,
-                                screenWidth, screenHeight)
-      U.ApplyFramePoint(frame, { point = point, relativePoint = relativePoint,
-                                 x = ox, y = oy })
-    end
+    U.ApplyFramePoint(frame, before)
     local nameOk, name = pcall(frame.GetName, frame)
     U.Debug("screenguard: correction for " .. tostring(nameOk and name or "?") ..
             " did not land on screen; reverted")
