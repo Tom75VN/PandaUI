@@ -724,11 +724,15 @@ function pw.BuildChrome(win)
     end)
   end
   Portrait(pw.Texture(rim, "BACKGROUND", tex.portraitBackground), p.discSize)
-  win.portrait = pw.Texture(rim, "ARTWORK")
+  -- BORDER < ARTWORK < OVERLAY guarantees icon < mask < gold ring.
+  win.portrait = pw.Texture(rim, "BORDER")
   Portrait(win.portrait, p.iconSize)
   if win.portrait then
-    pcall(win.portrait.SetTexCoord, win.portrait, 0.08, 0.92, 0.08, 0.92)
+    pcall(win.portrait.SetTexCoord, win.portrait, p.texCoord[1],
+          p.texCoord[2], p.texCoord[3], p.texCoord[4])
   end
+  win.portraitMask = pw.Texture(rim, "ARTWORK", tex.portraitMask)
+  Portrait(win.portraitMask, p.maskSize)
 
   win.title = pw.Label(rim, M.fontSize.normal, t.titleColor, "CENTER")
   if win.title then
@@ -2835,8 +2839,8 @@ function U.ModernWowProfessionsWanted()
 end
 
 -- For modules/castbar.lua's craft dock: the shown window's own addon-owned
--- Create All button and the gap to keep left of it, or nil. The Craft window
--- (Enchanting, Beast Training) has no Create All and offers nothing.
+-- Create All button, or the Craft window's single Create button, and the gap
+-- to keep left of it. Both are safe addon-owned anchors.
 function U.ProfessionsCastBarAnchor()
   if U.GetActiveThemeStyle() == "modern" and
      type(U.ModernProfessionsCastBarAnchor) == "function" then
@@ -2845,9 +2849,10 @@ function U.ProfessionsCastBarAnchor()
   local i
   for i = 1, table.getn(pw.windows) do
     local win = pw.windows[i]
-    if win.createAll and pw.Shown(win.frame) and pw.Shown(win.createAll) then
+    local anchor = win.createAll or win.create
+    if anchor and pw.Shown(win.frame) and pw.Shown(anchor) then
       local b = pw.Token().button
-      return win.createAll, b.castBarGap, b.castBarShiftX, b.castBarShiftY
+      return anchor, b.castBarGap, b.castBarShiftX, b.castBarShiftY
     end
   end
   return nil

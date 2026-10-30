@@ -42,6 +42,7 @@ local POSITION_ID = "minimapbutton"
 local modernFlatMinimap = { dressed = false }
 local modernWowMinimap = { dressed = false }
 local SHAPE_DEFAULTS = { modernWowShape = "circle" }
+local MOVER_SHAPE_WIDTH = 220
 
 local function ModernWow()
   return type(U.ModernWowModuleEnabled) == "function" and
@@ -316,6 +317,20 @@ local function ApplyModernWowShape()
 end
 
 U.ApplyMinimapShape = ApplyModernWowShape
+
+-- The settings page and the selected minimap mover are two views of the same
+-- saved shape. Keep both current when either one changes it.
+local function SetModernWowShape(value)
+  local shape = value == "square" and "square" or "circle"
+  U.ModuleConfig("minimap", SHAPE_DEFAULTS).modernWowShape = shape
+  ApplyModernWowShape()
+  if type(U.RefreshSettingsPage) == "function" then
+    U.RefreshSettingsPage("minimap")
+  end
+  if type(U.RefreshMoverPanel) == "function" then
+    U.RefreshMoverPanel("minimap")
+  end
+end
 
 -- Complete modern-wow drawing path. The imported layout is working-source
 -- evidence from DragonflightUI-Reforged; every client-owned object remains
@@ -629,6 +644,9 @@ local GROUP_NAME = "PandaUIGroupButton"
 local GROUP_DEFAULT_ANGLE = 180
 local FLYOUT_PAD = 6
 local FLYOUT_GAP = 4
+local GROUP_MENU_WIDTH = 240
+local GROUP_MENU_ROW_HEIGHT = 20
+local GROUP_MENU_FRAME_LEVEL = 80
 -- Bottom-left, the usual minimap-button spot; no native icon starts there.
 local SETTINGS_DEFAULT_ANGLE = 225
 -- Icon centres sit this far outside the map's edge, like the native icons.
@@ -896,9 +914,10 @@ end
 -- icons above plus other addons' minimap buttons, found the way pfUI-octo's
 -- addonbuttons module finds them (WORKING_112_SOURCE): named Minimap and
 -- MinimapBackdrop children up to 40px with a click or mouse script. The
--- Minimap settings page picks the members; config ungrouped[name] keeps an icon
--- on the map. The icons stay their owners' frames: parent, strata, level and
--- anchors are saved on capture and all restored on release
+-- Minimap settings and the launcher's right-click menu pick the members;
+-- config ungrouped[name] keeps an icon on the map. The icons stay their
+-- owners' frames: parent, strata, level and anchors are saved on capture and
+-- all restored on release
 -- (knowledge.json / minimap.icon_grouping_flyout_unverified).
 -- ---------------------------------------------------------------------------
 local ADDON_BUTTON_MAX = 40
@@ -1029,7 +1048,11 @@ function group.Build()
   if group.flyout then return group.flyout end
   local flyout = U.CreatePanel(UIParent, {
     name = "PandaUIGroupFlyout", width = 100, height = 40,
+    background = M.modernWow.dropdown.unitPopupListFill,
+    border = false,
+    textureFill = true,
   })
+  group.StyleMenu(flyout)
   pcall(flyout.SetFrameStrata, flyout, "DIALOG")
   pcall(flyout.EnableMouse, flyout, true)
   pcall(flyout.SetClampedToScreen, flyout, true)
@@ -1041,6 +1064,189 @@ function group.Build()
   end
   group.flyout = flyout
   return flyout
+end
+
+-- The same Modern WoW framed menu as the unit and party right-click menus.
+-- Its fill is inset before the shared ThinBorder is built, so it cannot show
+-- through the rim's transparent outer pixels or rounded corners.
+function group.StyleMenu(menu)
+  if not menu or menu.puiGroupMenuStyled then return end
+  menu.puiGroupMenuStyled = true
+  local borderSize = M.modernWow.dropdown.borderSize
+  if menu.puiFill then
+    U.SetColor(menu.puiFill, M.Unpack(M.modernWow.dropdown.unitPopupListFill))
+    if type(U.ModernWowThinBorderFill) == "function" then
+      U.ModernWowThinBorderFill(menu.puiFill, menu, borderSize)
+    end
+  end
+  if type(U.ModernWowBuildThinBorder) == "function" then
+    U.ModernWowBuildThinBorder(menu, borderSize)
+  end
+end
+
+-- The textured checkbox painter clears the row's old flat hover backdrop, so
+-- the membership list owns a simple hover fill above that retired backdrop.
+function group.StyleMenuRow(control)
+  local row = control and control.row
+  if not row or row.puiGroupMenuHover then return end
+  local hover = row:CreateTexture(nil, "BACKGROUND")
+  if not hover then return end
+  hover:SetTexture(M.texture.plain)
+  hover:SetAllPoints(row)
+  local color = M.foreverWow.list.hover.color
+  U.SetColor(hover, M.Unpack(color))
+  hover:Hide()
+  row.puiGroupMenuHover = hover
+  U.PostHookScript(row, "OnEnter", function()
+    if control.enabled then hover:Show() end
+  end)
+  U.PostHookScript(row, "OnLeave", function() hover:Hide() end)
+end
+
+-- A screen-sized button below the menu absorbs the next outside click. The
+-- menu remains above it at the same DIALOG strata, so icon rows stay usable.
+function group.BuildMenuClickCatcher()
+  if group.menuClickCatcher then return group.menuClickCatcher end
+  local catcher = CreateFrame("Button", "PandaUIGroupMenuClickCatcher", UIParent)
+  pcall(catcher.SetAllPoints, catcher, UIParent)
+  pcall(catcher.SetFrameStrata, catcher, "DIALOG")
+  pcall(catcher.SetFrameLevel, catcher, GROUP_MENU_FRAME_LEVEL - 1)
+  pcall(catcher.EnableMouse, catcher, true)
+  pcall(catcher.RegisterForClicks, catcher, "LeftButtonUp", "RightButtonUp")
+  catcher:SetScript("OnClick", function()
+    if group.menu then group.menu:Hide() end
+  end)
+  catcher:Hide()
+  group.menuClickCatcher = catcher
+  return catcher
+end
+
+-- Right-clicking the group launcher opens a compact membership list. Ticked
+-- icons live in the flyout; unticked icons are restored to the minimap rim.
+function group.BuildMenu()
+  if group.menu then return group.menu end
+  local menu = U.CreatePanel(UIParent, {
+    name = "PandaUIGroupMenu", width = GROUP_MENU_WIDTH, height = 12,
+    background = M.modernWow.dropdown.unitPopupListFill,
+    border = false,
+    textureFill = true,
+  })
+  group.StyleMenu(menu)
+  pcall(menu.SetFrameStrata, menu, "DIALOG")
+  pcall(menu.SetFrameLevel, menu, GROUP_MENU_FRAME_LEVEL)
+  pcall(menu.EnableMouse, menu, true)
+  pcall(menu.SetClampedToScreen, menu, true)
+  menu.rows = {}
+  group.BuildMenuClickCatcher()
+  menu:SetScript("OnShow", function()
+    group.RefreshMenu()
+    if group.menuClickCatcher then group.menuClickCatcher:Show() end
+  end)
+  menu:SetScript("OnHide", function()
+    if group.menuClickCatcher then group.menuClickCatcher:Hide() end
+  end)
+  menu:Hide()
+  local special = U.G("UISpecialFrames")
+  if type(special) == "table" then
+    table.insert(special, "PandaUIGroupMenu")
+  end
+  group.menu = menu
+  return menu
+end
+
+function group.RefreshMenu()
+  local menu = group.menu
+  if not menu then return end
+
+  group.Scan()
+  local cfg = group.Config()
+  local candidates = group.Candidates()
+  local visible = {}
+  local count = 0
+  local i
+  for i = 1, table.getn(candidates) do
+    local name = candidates[i]
+    local control = menu.rows[name]
+    if not control then
+      local boxSize = 12
+      if type(U.GameSettingsCheckboxSize) == "function" then
+        local size = U.GameSettingsCheckboxSize()
+        if type(size) == "number" then boxSize = size end
+      end
+      control = U.CreateCheckbox(menu, {
+        size = boxSize,
+        rowHover = true,
+        rowWidth = GROUP_MENU_WIDTH - 12,
+        rowHeight = GROUP_MENU_ROW_HEIGHT,
+        text = group.Label(name),
+        textWidth = GROUP_MENU_WIDTH - 34,
+        value = not cfg.ungrouped[name],
+        onChange = function(value)
+          group.Config().ungrouped[name] = (not value) and true or nil
+          group.Apply()
+        end,
+      })
+      if type(U.StyleGameSettingsCheckbox) == "function" then
+        U.StyleGameSettingsCheckbox(control)
+      end
+      group.StyleMenuRow(control)
+      menu.rows[name] = control
+    end
+
+    visible[name] = true
+    count = count + 1
+    if control.label then control.label:SetText(group.Label(name)) end
+    control.SetValue(not cfg.ungrouped[name])
+    if control.row and control.row.puiGroupMenuHover then
+      control.row.puiGroupMenuHover:Hide()
+    end
+    if control.row then
+      control.row:ClearAllPoints()
+      control.row:SetPoint("TOPLEFT", menu, "TOPLEFT", 6,
+                           -6 - (count - 1) * GROUP_MENU_ROW_HEIGHT)
+      control.row:Show()
+    end
+  end
+
+  local name, control
+  for name, control in pairs(menu.rows) do
+    if not visible[name] and control.row then control.row:Hide() end
+  end
+  menu:SetHeight(12 + count * GROUP_MENU_ROW_HEIGHT)
+end
+
+function group.ShowMenu()
+  local menu = group.BuildMenu()
+  group.RefreshMenu()
+  if group.flyout then group.flyout:Hide() end
+
+  -- Match the flyout's scale when the player has resized the minimap.
+  local minimap = U.G("Minimap")
+  if minimap then
+    local mapOk, mapScale = pcall(minimap.GetEffectiveScale, minimap)
+    local uiOk, uiScale = pcall(UIParent.GetEffectiveScale, UIParent)
+    if mapOk and uiOk and type(mapScale) == "number" and
+       type(uiScale) == "number" and uiScale > 0 then
+      pcall(menu.SetScale, menu, mapScale / uiScale)
+    end
+  end
+
+  local launcher = group.launcher
+  local below = false
+  local ok, _, cy = pcall(launcher.GetCenter, launcher)
+  local scaleOk, scale = pcall(launcher.GetEffectiveScale, launcher)
+  local uiOk, uiScale = pcall(UIParent.GetEffectiveScale, UIParent)
+  if ok and scaleOk and uiOk and type(cy) == "number" and
+     type(scale) == "number" and type(uiScale) == "number" then
+    below = cy * scale > UIParent:GetHeight() * uiScale / 2
+  end
+  menu:ClearAllPoints()
+  if below then
+    menu:SetPoint("TOPRIGHT", launcher, "BOTTOMRIGHT", 0, -2)
+  else
+    menu:SetPoint("BOTTOMRIGHT", launcher, "TOPRIGHT", 0, 2)
+  end
+  menu:Show()
 end
 
 -- Lays the members the client currently shows in rows, then hangs the flyout
@@ -1191,6 +1397,7 @@ function group.Apply()
   else
     group.launcher:Hide()
     if group.flyout then group.flyout:Hide() end
+    if group.menu then group.menu:Hide() end
   end
 end
 U.ApplyMinimapGroup = function() group.Apply() end
@@ -1247,7 +1454,13 @@ function group.CreateLauncher(minimap)
     end
   end
 
+  pcall(button.RegisterForClicks, button, "LeftButtonUp", "RightButtonUp")
   button:SetScript("OnClick", function()
+    if arg1 == "RightButton" then
+      group.ShowMenu()
+      return
+    end
+    if group.menu then group.menu:Hide() end
     local flyout = group.Build()
     if flyout:IsShown() then flyout:Hide() else flyout:Show() end
   end)
@@ -1406,8 +1619,7 @@ local function BuildSettingsPage(parent)
         { value = "square", text = U.L("SETTINGS_MINIMAP_SHAPE_SQUARE") },
       },
       onChange = function(value)
-        U.ModuleConfig("minimap", SHAPE_DEFAULTS).modernWowShape = value
-        ApplyModernWowShape()
+        SetModernWowShape(value)
       end,
     })
     shape.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -51)
@@ -1488,10 +1700,59 @@ local function BuildSettingsPage(parent)
   return widgets, Refresh
 end
 
+-- The edit-mode panel is deliberately available only for the Modern WoW
+-- theme, which is the only path with the circle/square minimap choice.
+local function BuildMoverPanel(frame, contentTop)
+  local pad = U.MoverPanelPad()
+  local widgets = {}
+
+  local label = U.CreateSettingsLabel(frame, {
+    size = M.fontSize.small,
+    color = M.color.text,
+    inherits = "GameFontNormalSmall",
+    justify = "LEFT",
+  })
+  if label then
+    label:SetPoint("TOPLEFT", frame, "TOPLEFT", pad, contentTop)
+    label:SetText(U.L("SETTINGS_MINIMAP_SHAPE"))
+    table.insert(widgets, label)
+  end
+
+  local shape = U.CreateDropdown(frame, {
+    name = "PandaUIMinimapMoverShape",
+    value = ModernWowShape(),
+    width = MOVER_SHAPE_WIDTH,
+    height = 24,
+    rowHeight = 20,
+    items = {
+      { value = "circle", text = U.L("SETTINGS_MINIMAP_SHAPE_CIRCLE") },
+      { value = "square", text = U.L("SETTINGS_MINIMAP_SHAPE_SQUARE") },
+    },
+    onChange = SetModernWowShape,
+  })
+  shape.SetPoint("TOPLEFT", frame, "TOPLEFT", pad, contentTop - 16)
+  table.insert(widgets, shape)
+
+  local function Refresh()
+    shape.SetValue(ModernWowShape(), false)
+  end
+  return widgets, Refresh
+end
+
 function MM:OnInit()
   if type(U.RegisterSettingsTab) == "function" then
     U.RegisterSettingsTab("minimap", U.L("SETTINGS_PAGE_MINIMAP"), BuildSettingsPage,
                           { after = "general" })
+  end
+  if type(U.RegisterMoverPanel) == "function" then
+    U.RegisterMoverPanel("minimap", {
+      name = "PandaUIMinimapMoverSettings",
+      width = MOVER_SHAPE_WIDTH + U.MoverPanelPad() * 2,
+      height = 96,
+      build = BuildMoverPanel,
+      title = function() return U.L("MOVER_LABEL_MINIMAP") end,
+      available = function() return ModernWowTheme() end,
+    })
   end
 end
 

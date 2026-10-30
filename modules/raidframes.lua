@@ -1282,8 +1282,7 @@ local function Layout(members)
 
       group.background:ClearAllPoints()
       group.background:SetPoint("TOPLEFT", group, "TOPLEFT",
-                                -R.groupBorder.left,
-                                -metrics.title + R.groupBorder.top)
+                                -R.groupBorder.left, R.groupBorder.top)
       group.background:SetPoint("BOTTOMRIGHT", group, "BOTTOMRIGHT",
                                 R.groupBorder.right, -R.groupBorder.bottom)
       if metrics.boxed then

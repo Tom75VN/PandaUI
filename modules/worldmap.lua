@@ -755,11 +755,25 @@ local function HideBlackout()
   end
 end
 
+-- The stock map OnShow pings the player (WorldMapFrame_PingPlayerPosition).
+-- With the zoom layout that ping draws away from the player cursor, so it is
+-- hidden right after OnShow, before the first draw (user request, 2026-10-30;
+-- knowledge.json / map.worldmap_open_ping_detached_from_player_arrow).
+local function HideOpeningPing()
+  local ping = U.G("WorldMapPing")
+  if ping and ping.Hide then pcall(ping.Hide, ping) end
+end
+
+local function OnMapShow()
+  HideBlackout()
+  HideOpeningPing()
+end
+
 function WMAP:OnEnable()
   HideBlackout()
   local mapFrame = U.G("WorldMapFrame")
   if mapFrame and type(U.PostHookScript) == "function" then
-    U.PostHookScript(mapFrame, "OnShow", HideBlackout)
+    U.PostHookScript(mapFrame, "OnShow", OnMapShow)
   end
 
   -- Run directly after the stock map's own update, matching the supplied

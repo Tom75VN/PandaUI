@@ -1878,9 +1878,10 @@ function U.ModernProfessionsCastBarAnchor()
   local i
   for i = 1, table.getn(pm.windows) do
     local win = pm.windows[i]
-    if win.createAll and pm.Shown(win.frame) and pm.Shown(win.createAll) then
+    local anchor = win.createAll or win.create
+    if anchor and pm.Shown(win.frame) and pm.Shown(anchor) then
       local c = pm.Token().controls
-      return win.createAll, c.castBarGap, c.castBarShiftX, c.castBarShiftY
+      return anchor, c.castBarGap, c.castBarShiftX, c.castBarShiftY
     end
   end
   return nil

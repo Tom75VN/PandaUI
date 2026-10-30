@@ -16,7 +16,6 @@ local SLOTS = {
   "MainHandSlot", "SecondaryHandSlot", "RangedSlot",
 }
 
-local TAB_COUNT = 3
 local PANEL_INSET_LEFT = 10
 local PANEL_INSET_RIGHT = 30
 
@@ -24,7 +23,7 @@ local GOLD = M.color.textAccent
 local WHITE = M.color.text
 local DIM = M.color.textDim
 
-local frame, panel, built, keepNativeChrome, modernWowMode
+local frame, panel, built, keepNativeChrome, modernMode, modernWowMode
 
 local function G(name)
   return U.G(name)
@@ -132,14 +131,264 @@ local function StyleSlots(nativeChrome)
   for i = 1, table.getn(SLOTS) do StyleSlot(SLOTS[i], nativeChrome) end
 end
 
--- Inspect is intentionally gear-only. The client documents remote honor APIs,
--- but this interface does not expose Character/Honor navigation by design.
-local function HideTabs()
+-- Keep the gear tab available so Turtle's optional Talent page always has a
+-- route back to the paper doll. Remote Honor remains outside this interface;
+-- Turtle creates and owns its Talent tab after the inspect window first opens.
+local function RefreshTabs()
+  local gear = G("InspectFrameTab1")
+  local honor = G("InspectFrameTab2")
+  if gear then pcall(gear.Show, gear) end
+  if honor then pcall(honor.Hide, honor) end
+end
+
+local function ShownTabs(tabs)
+  local shown = {}
   local i
-  for i = 1, TAB_COUNT do
-    local tab = G("InspectFrameTab" .. i)
-    if tab then pcall(tab.Hide, tab) end
+  for i = 1, table.getn(tabs) do
+    local tab = tabs[i]
+    if tab and tab.IsShown then
+      local ok, visible = pcall(tab.IsShown, tab)
+      if ok and visible then table.insert(shown, tab) end
+    end
   end
+  return shown
+end
+
+local function LayoutModernTabs()
+  if not modernMode or not frame or not panel then return end
+  local tabs = {
+    G("InspectFrameTab1"), G("InspectFrameTab2"),
+    G("InspectFrameTab3"), G("InspectFrameTab4"),
+  }
+  local shown = ShownTabs(tabs)
+  U.ChainStockTabs(shown, 3)
+  U.FitStockTabStrip(shown, frame, {
+    gap = 3,
+    left = PANEL_INSET_LEFT,
+    right = PANEL_INSET_RIGHT,
+    padding = M.tab.padding,
+    minPadding = M.tab.padding,
+    anchor = {
+      frame = panel,
+      point = "TOPLEFT",
+      relativePoint = "BOTTOMLEFT",
+      x = 0,
+      y = 1,
+    },
+  })
+end
+
+local function WireModernTalentTab(tab, tabs)
+  if not tab or tab.puiInspectTalentWired then return end
+  local nameOk, name = pcall(tab.GetName, tab)
+  local request = G("InspectFrameTalentsTab_OnClick")
+  if not nameOk or name ~= "InspectFrameTab4" or
+     type(request) ~= "function" then return end
+
+  -- Turtle's four-tab Inspect XML routes Tab4 through InspectFrameTab_OnClick,
+  -- which only reveals the empty InspectTalentsFrame parent. Its separate
+  -- talent handler requests remote data and shows TWTalentFrame when ready.
+  tab.puiInspectTalentWired = true
+  pcall(tab.SetScript, tab, "OnClick", function()
+    local handler = G("InspectFrameTalentsTab_OnClick")
+    if type(handler) == "function" then handler() end
+  end)
+  U.PostHookScript(tab, "OnClick", function()
+    local i
+    for i = 1, table.getn(tabs) do
+      if tabs[i] and tabs[i].SetActive then
+        tabs[i].SetActive(i == 4)
+      end
+    end
+    LayoutModernTabs()
+  end)
+end
+
+local function StyleModernTabs()
+  if not modernMode or not frame then return end
+  local tabs = {
+    G("InspectFrameTab1"), G("InspectFrameTab2"),
+    G("InspectFrameTab3"), G("InspectFrameTab4"),
+  }
+  WireModernTalentTab(tabs[4], tabs)
+  local available = 0
+  local i
+  for i = 1, table.getn(tabs) do
+    if tabs[i] then available = available + 1 end
+  end
+  if available > (frame.puiInspectModernTabCount or 0) then
+    frame.puiInspectModernTabCount = available
+    local selected = tonumber(frame.selectedTab) or 1
+    U.StyleStockTabGroup(tabs, selected)
+    for i = 1, table.getn(tabs) do
+      if tabs[i] and not tabs[i].puiInspectLayoutHooked then
+        tabs[i].puiInspectLayoutHooked = true
+        U.PostHookScript(tabs[i], "OnClick", LayoutModernTabs)
+      end
+    end
+  end
+
+  local selected = tonumber(frame.selectedTab) or 1
+  for i = 1, table.getn(tabs) do
+    if tabs[i] and tabs[i].SetActive then
+      tabs[i].SetActive(i == selected)
+    end
+  end
+  LayoutModernTabs()
+end
+
+local function StyleArenaTeam(team)
+  if not team then return end
+  if not team.puiInspectModern then
+    team.puiInspectModern = true
+    U.StripStockTextures(team)
+    U.CreateBackdrop(team, {
+      background = { 0.02, 0.02, 0.02, 0.86 },
+      border = M.color.border,
+    })
+
+    local nameOk, name = pcall(team.GetName, team)
+    if nameOk and type(name) == "string" then
+      local details = G(name .. "Details")
+      U.StripStockTextures(details)
+      SetTextFont(G(name .. "Text"), M.fontSize.large, DIM)
+      if details then
+        U.ForceStockTextWhite(details, WHITE, M.fontSize.small)
+        SetTextFont(G(name .. "DetailsName"), M.fontSize.small, GOLD)
+      end
+    end
+  end
+end
+
+local function StyleModernArena()
+  if not modernMode then return end
+  local arena = G("InspectArenaFrame")
+  if not arena then return end
+  if not arena.puiInspectModern then
+    arena.puiInspectModern = true
+    U.StripStockTextures(arena)
+    U.PostHookScript(arena, "OnShow", StyleModernArena)
+  end
+
+  local i
+  for i = 1, 3 do StyleArenaTeam(G("InspectArenaFrameTeam" .. i)) end
+end
+
+local function LayoutModernTalentTabs()
+  local talent = G("TWTalentFrame")
+  if not modernMode or not talent then return end
+  local tabs = {
+    G("TWTalentFrameTab1"), G("TWTalentFrameTab2"), G("TWTalentFrameTab3"),
+  }
+  U.ChainStockTabs(tabs, 3)
+  U.FitStockTabStrip(tabs, talent, {
+    gap = 3,
+    left = 23,
+    right = 41,
+    padding = M.tab.padding,
+    minPadding = 4,
+    anchor = {
+      frame = talent,
+      point = "TOPLEFT",
+      relativePoint = "TOPLEFT",
+      x = 23,
+      y = -3,
+    },
+  })
+end
+
+local function RefreshModernTalentButtons()
+  local i
+  for i = 1, 20 do
+    local name = "TWTalentFrameTalent" .. i
+    local button = G(name)
+    if button then
+      U.StyleStockButton(button, { icon = G(name .. "IconTexture") })
+      U.HideRegion(G(name .. "Slot"))
+      U.HideRegion(G(name .. "RankBorder"))
+    end
+  end
+end
+
+local function RefreshModernTalentChrome()
+  RefreshModernTalentButtons()
+  LayoutModernTalentTabs()
+end
+
+local function InsetTalentSurface(talent)
+  if not talent or not talent.puiFill or not talent.puiEdges then return end
+  local fill = talent.puiFill
+  pcall(function()
+    fill:ClearAllPoints()
+    fill:SetPoint("TOPLEFT", talent, "TOPLEFT", 10, 0)
+    fill:SetPoint("BOTTOMRIGHT", talent, "BOTTOMRIGHT", -30, 9)
+
+    talent.puiEdges[1]:ClearAllPoints()
+    talent.puiEdges[1]:SetPoint("TOPLEFT", talent, "TOPLEFT", 10, 0)
+    talent.puiEdges[1]:SetPoint("TOPRIGHT", talent, "TOPRIGHT", -30, 0)
+    talent.puiEdges[2]:ClearAllPoints()
+    talent.puiEdges[2]:SetPoint("BOTTOMLEFT", talent, "BOTTOMLEFT", 10, 9)
+    talent.puiEdges[2]:SetPoint("BOTTOMRIGHT", talent, "BOTTOMRIGHT", -30, 9)
+    talent.puiEdges[3]:ClearAllPoints()
+    talent.puiEdges[3]:SetPoint("TOPLEFT", talent, "TOPLEFT", 10, 0)
+    talent.puiEdges[3]:SetPoint("BOTTOMLEFT", talent, "BOTTOMLEFT", 10, 9)
+    talent.puiEdges[4]:ClearAllPoints()
+    talent.puiEdges[4]:SetPoint("TOPRIGHT", talent, "TOPRIGHT", -30, 0)
+    talent.puiEdges[4]:SetPoint("BOTTOMRIGHT", talent, "BOTTOMRIGHT", -30, 9)
+  end)
+end
+
+local function StyleModernTalents()
+  if not modernMode then return end
+  local page = G("InspectTalentsFrame")
+  local talent = G("TWTalentFrame")
+  if not page or not talent then return end
+
+  if not page.puiInspectModern then
+    page.puiInspectModern = true
+    U.StripStockTextures(page)
+  end
+  local tabs = {
+    G("TWTalentFrameTab1"), G("TWTalentFrameTab2"),
+    G("TWTalentFrameTab3"),
+  }
+  if not talent.puiInspectModern then
+    talent.puiInspectModern = true
+    U.CreateBackdrop(talent, {
+      background = { 0.01, 0.01, 0.01, 0.72 },
+      border = M.color.border,
+      textureFill = true,
+    })
+    InsetTalentSurface(talent)
+    U.StripStockTextures(G("TWTalentFrameScrollFrame"))
+    U.StyleStockScrollbar(G("TWTalentFrameScrollFrameScrollBar"))
+
+    U.StyleStockTabGroup(tabs, tonumber(talent.selectedTab) or 1)
+    local i
+    for i = 1, table.getn(tabs) do
+      if tabs[i] then
+        U.PostHookScript(tabs[i], "OnClick", LayoutModernTalentTabs)
+      end
+    end
+    U.PostHookScript(talent, "OnShow", StyleModernTalents)
+    U.PostHookGlobal("TWTalentFrame_Update", RefreshModernTalentChrome)
+  end
+
+  local selected = tonumber(talent.selectedTab) or 1
+  local i
+  for i = 1, table.getn(tabs) do
+    if tabs[i] and tabs[i].SetActive then
+      tabs[i].SetActive(i == selected)
+    end
+  end
+  RefreshModernTalentChrome()
+end
+
+local function StyleModernInspect()
+  if not modernMode then return end
+  StyleModernTabs()
+  StyleModernArena()
+  StyleModernTalents()
 end
 
 local function StyleModel()
@@ -174,9 +423,18 @@ local function Reapply()
     SetTextFont(G("InspectLevelText"), M.fontSize.small, WHITE)
     SetTextFont(G("InspectGuildText"), M.fontSize.small, DIM)
   end
-  HideTabs()
+  RefreshTabs()
   RefreshClassLine()
   StyleSlots(keepNativeChrome)
+  if modernMode then
+    -- Turtle completes the optional Arena and Talent pages after OnShow.
+    U.DeferOnce("inspect.modern-show", StyleModernInspect)
+  end
+  if modernWowMode and type(U.ModernWowDressInspect) == "function" then
+    -- Turtle creates its Talent tab after the native InspectFrame OnShow
+    -- returns, so dress the final tab group on the next frame.
+    U.DeferOnce("inspect.modernwow-show", U.ModernWowDressInspect)
+  end
 end
 
 local function BuildFrame()
@@ -227,7 +485,7 @@ local function BuildFrame()
     U.StripStockTextures(G("InspectPaperDollFrame"))
   end
 
-  HideTabs()
+  RefreshTabs()
   StyleSlots(keepNativeChrome)
   U.MakeWindowDraggable("inspect", frame, {
     headerHeight = keepNativeChrome and 40 or 76,
@@ -271,6 +529,7 @@ local function BuildFrame()
   if modernWowMode and type(U.ModernWowDressInspect) == "function" then
     U.ModernWowDressInspect()
   end
+  if modernMode then StyleModernInspect() end
   return true
 end
 
@@ -279,6 +538,7 @@ local function TryBuild()
 end
 
 function INS:OnEnable()
+  modernMode = U.GetActiveThemeStyle() == "modern"
   modernWowMode = type(U.ModernWowSurfaceEnabled) == "function" and
                   U.ModernWowSurfaceEnabled("character")
   if BuildFrame() then return end

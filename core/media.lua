@@ -164,6 +164,9 @@ M.texture = {
   -- not have renders blank, so changing either one line fixes both surfaces.
   bagIcon = "Interface\\Icons\\INV_Misc_Bag_08",
   keyringIcon = "Interface\\Icons\\INV_Misc_Key_03",
+  -- The bag header's settings button (modules/bags.lua): the client's own gear
+  -- icon, the one the minimap settings button already falls back to.
+  bagSettingsIcon = "Interface\\Icons\\INV_Misc_Gear_01",
   -- The bag window's saved-bank button (modules/bankview.lua). Bundled
   -- 64x64 uncompressed 32-bit TGA, the same encoding as sortIcon/stackIcon.
   bankViewIcon = "Interface\\AddOns\\pandaUI\\media\\icons\\view-bank-64",
@@ -2114,8 +2117,8 @@ M.classicSpellBookBarGlow = {
 --
 -- Row geometry is WORKING_SOURCE: WoW-DragonflightUI XML/ProfessionSpellbook.xml
 -- places its rows at page texel x 73 with y 42/135 (primary, 81 tall) and
--- 238/295/352/409 (secondary, 46 tall), which match the bands measured off
--- the left page (dark row rules at y ~40, ~133, ~234, ~292, ~349, ~406).
+-- five secondary rows fit between the primary rows and the page footer. Their
+-- compact 53-texel step preserves the authored 46-texel row height.
 -- The name/rank/bar offsets inside a row are compacted from that template so
 -- all three fit the scaled row.
 --
@@ -2147,7 +2150,7 @@ M.modernWow.spellBook.professions = {
 
   rowLeft = 73,
   primaryTop = { 42, 135 },
-  secondaryTop = { 238, 295, 352, 409 },
+  secondaryTop = { 231, 284, 337, 390, 443 },
 
   ring = { x = 7, y = 7, size = 72, icon = 50 },
   primary = { nameY = 10, rankY = 32, barX = 114, barY = 54,
@@ -2751,6 +2754,7 @@ M.modernWow.professions = {
     topStreak = M.modernWow.talents.texture.topStreak,
     portraitRing = M.modernWow.talents.texture.portraitRing,
     portraitBackground = M.modernWow.texture.portraitBackground,
+    portraitMask = M.modernWow.path .. "ui\\profession\\portrait-mask",
     missingIcon = "Interface\\Icons\\INV_Misc_QuestionMark",
     beastTrainingIcon = "Interface\\Icons\\Ability_Hunter_BeastCall02",
     -- Achievement metal border around the item-stat panel.
@@ -2972,7 +2976,7 @@ M.modernWow.professions = {
              countWidth = 30, countGap = 4, capWidth = 12,
              glyphWidth = 11, glyphHeight = 8,
              hoverAlpha = 0.5, disabledAlpha = 0.4, maxCount = 99,
-             -- Player cast bar docked left of Create All while crafting.
+             -- Player cast bar docked left of Create/Create All while crafting.
              castBarGap = 6,
              -- Extra nudge of the docked bar, in UI units (user request).
              castBarShiftX = -10, castBarShiftY = 5 },
@@ -3554,7 +3558,9 @@ M.modernWow.characterWindow = {
   -- into the stats pane, so it moves into the band between the title bar
   -- (21) and the insets (60), centred `y` below the top with its right edge
   -- on InsetRight's -- where Retail keeps its paper-doll sidebar tabs.
-  title = { left = 58, right = 24, top = 7 },
+  -- Inspect's large stock font sits lower inside its FontString than the
+  -- Character name, so its authored title-strip anchor is lifted 3 units.
+  title = { left = 58, right = 24, top = 7, inspectTop = 4 },
   close = { right = 3, top = 3 },
   titleDropDown = { right = 2, y = 40.5 },
 }
@@ -3563,11 +3569,12 @@ M.modernWow.characterWindow = {
 -- 2026-09-29): PortraitMetal with its own ring instead of DF-main's
 -- ButtonFrameTemplateNoPortrait and separate portrait ring. The window is the
 -- housing itself (origin 0, 0), so the icon centres at `portrait` x/y. A
--- square icon has no circular mask here: `iconSize` keeps its corners under
--- the ring's 27-30 band (half-diagonal 28.3), the stone disc fills the rest.
+-- generated inverse-circle overlay hides the icon's square corners beneath
+-- the ring. The light crop removes borders baked into stock square icons.
 M.modernWow.professions.frame = M.modernWow.characterWindow.frame
 M.modernWow.professions.portrait = {
-  iconSize = 40, discSize = 56,
+  iconSize = 44, maskSize = 44, discSize = 56,
+  texCoord = { 0.08, 0.92, 0.08, 0.92 },
   x = M.modernWow.characterWindow.portrait.x,
   y = M.modernWow.characterWindow.portrait.y,
 }
@@ -5560,7 +5567,7 @@ M.modernWow.tab.hoverTextColor = M.color.text
 -- The `modern` Spellbook's Professions page. The page reuses the shared
 -- profession scan and native spell-button mapping from
 -- modules/spellbookprofessions.lua, but all of its chrome is the flat modern
--- system: six compact rows, one outline per surface and semantic green skill
+-- system: seven compact rows, one outline per surface and semantic green skill
 -- progress. Coordinates are window units from SpellBookFrame's TOPLEFT.
 M.spellBook = {
   professions = {
@@ -5570,7 +5577,7 @@ M.spellBook = {
     },
     rowLeft = 24,
     primaryTop = { 58, 114 },
-    secondaryTop = { 170, 226, 282, 338 },
+    secondaryTop = { 170, 214, 258, 302, 346 },
     secondaryGap = 16,
     row = {
       -- SpellBook's flat panel runs from frame x=12 to x=354. Starting rows
@@ -5578,6 +5585,7 @@ M.spellBook = {
       -- the same 12 px on the right.
       width = 318,
       height = 50,
+      secondaryHeight = 42,
       icon = 34,
       iconInset = 8,
       primaryTextX = 52,

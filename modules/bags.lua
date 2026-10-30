@@ -576,7 +576,7 @@ function modernBag.StyleHeader(window)
 
   local controls = {
     window.keyToggle, window.bagsToggle, window.pickLock, window.sell,
-    window.sortBags, window.stackBags, window.bankView,
+    window.sortBags, window.stackBags, window.bankView, window.settingsBtn,
   }
   local i
   for i = 1, table.getn(controls) do
@@ -1044,12 +1044,12 @@ end
 local search = {}
 
 function search.Build(window)
-  if search.ctl or not window or not window.bankView then return end
+  if search.ctl or not window or not window.settingsBtn then return end
   local spec = {
     window = window,
     name = "PandaUIBagSearch",
     id = "bags.search",
-    after = window.bankView,
+    after = window.settingsBtn,
     -- pairs, not table.getn: the category view builds no button for an empty
     -- slot, so a bag's slot table has holes and a counted walk stops at the
     -- first one, leaving every later item unshaded.
@@ -2192,12 +2192,31 @@ local function BuildHeader()
   classicBag.StyleIconButton(frame.bankView)
   frame.bankView:SetPoint("LEFT", frame.stackBags, "RIGHT", classicBag.IconGap(), 0)
 
+  -- Opens the Bags page of the settings window. Last in the icon group, after
+  -- the saved-bank button, the client's own gear icon at the standard crop and
+  -- HEADER_ICON size of its neighbours.
+  frame.settingsBtn = U.CreateIconButton(frame, {
+    name = "PandaUIBagSettings",
+    tooltipFrames = BagTooltipFrames,
+    size = HEADER_ICON,
+    texture = M.texture.bagSettingsIcon,
+    fallback = "*",
+    title = U.L("BAGS_SETTINGS"),
+    detail = function() return U.L("BAGS_SETTINGS_HINT") end,
+    onClick = function()
+      if type(U.OpenSettingsPage) == "function" then U.OpenSettingsPage("bags") end
+    end,
+  })
+  classicBag.StyleIconButton(frame.settingsBtn)
+  frame.settingsBtn:SetPoint("LEFT", frame.bankView, "RIGHT", classicBag.IconGap(), 0)
+
   -- Slot readout, left-aligned after the header icon group. Anchored to the
-  -- saved-bank button because that is the last icon in the group either way:
+  -- settings button because that is the last icon in the group either way:
   -- the Rogue Pick Lock shortcut is inserted before sell, RefreshRogueBagButton
   -- re-anchors sell when the skill is missing, stack follows sell or sort
-  -- (SetSortButtonShown) and the saved-bank button follows stack, so following
-  -- it keeps the readout in place without repeating either rule. Filled by
+  -- (SetSortButtonShown), the saved-bank button follows stack and the settings
+  -- button follows that, so following it keeps the readout in place without
+  -- repeating either rule. Filled by
   -- each layout pass; see RefreshSlotCount.
   frame.slotCount = U.CreateLabel(frame, {
     size = M.fontSize.small,
@@ -2206,7 +2225,7 @@ local function BuildHeader()
     justify = "LEFT",
   })
   if frame.slotCount then
-    frame.slotCount:SetPoint("LEFT", frame.bankView, "RIGHT", 8, 0)
+    frame.slotCount:SetPoint("LEFT", frame.settingsBtn, "RIGHT", 8, 0)
     frame.slotCount:Hide()
   end
 
@@ -2316,7 +2335,7 @@ local function BuildDragHandle()
     BagHeaderHeight(), {
       frame.close, frame.money, frame.keyToggle, frame.bagsToggle,
       frame.pickLock, frame.sell, frame.sortBags, frame.stackBags,
-      frame.bankView, search.field,
+      frame.bankView, frame.settingsBtn, search.field,
     })
 
   handle:RegisterForDrag("LeftButton")

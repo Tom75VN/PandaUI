@@ -1,8 +1,8 @@
 -- pandaUI :: modules/spellbookprofessions.lua
 --
 -- The Spellbook's Professions tab and page: a bottom tab beside Spellbook,
--- with two primary rows and four secondary rows (Poisons, Fishing, Cooking,
--- First Aid). The host supplies the complete drawing path: Dragonflight art
+-- with two primary rows and five secondary rows (Poisons, Survival, Fishing,
+-- Cooking, First Aid). The host supplies the complete drawing path: Dragonflight art
 -- under modern-wow/classic-wow, flat rows under modern.
 --
 -- Built by the window drawing path that hosts it (prof.host):
@@ -112,12 +112,15 @@ prof.NAMES = {
   fishing = { "Fishing", "Pêche", "Рыбная ловля", "钓鱼" },
   firstaid = { "First Aid", "Secourisme", "Первая помощь", "急救" },
   poisons = { "Poisons", "Яды", "毒药" },
+  jewelcrafting = { "Jewelcrafting", "Joaillerie", "Ювелирное дело",
+                    "珠宝加工", "珠宝加工 " },
+  survival = { "Survival", "Survie", "Выживание", "生存技能" },
 }
 
 prof.PRIMARY = {
   alchemy = true, blacksmithing = true, enchanting = true, engineering = true,
   herbalism = true, leatherworking = true, mining = true, skinning = true,
-  tailoring = true,
+  tailoring = true, jewelcrafting = true,
 }
 
 -- Spells named differently from their skill, matched by name before the icon
@@ -148,7 +151,14 @@ prof.ICONS = {
   fishing = { "trade_fishing" },
   firstaid = { "spell_holy_sealofsacrifice" },
   poisons = { "trade_brewpoison" },
+  jewelcrafting = { "inv_jewelry_necklace_11" },
+  survival = { "trade_survival" },
 }
+
+-- Turtle WoW adds Jewelcrafting as a primary profession and Survival as a
+-- secondary profession. Seven rows cover both additions without displacing
+-- any of the client's professions.
+prof.ROW_COUNT = 7
 
 function prof.Token()
   if prof.host and type(prof.host.Token) == "function" then
@@ -281,7 +291,7 @@ function U.ModernWowProfessionSpell(profession)
   if type(profession) ~= "string" or profession == "" then return nil end
   local rows = prof.Scan()
   local i
-  for i = 1, table.getn(rows.ordered) do
+  for i = 1, prof.ROW_COUNT do
     local entry = rows.ordered[i]
     if entry and entry.name == profession and entry.spells and entry.spells[1] then
       local spell = entry.spells[1]
@@ -308,17 +318,18 @@ end
 prof.CRAFTING = {
   alchemy = true, blacksmithing = true, enchanting = true,
   engineering = true, leatherworking = true, mining = true,
-  tailoring = true, cooking = true, firstaid = true, poisons = true,
+  tailoring = true, jewelcrafting = true, survival = true,
+  cooking = true, firstaid = true, poisons = true,
 }
 
 function U.GetCraftingProfessionTabs()
   local rows = prof.Scan()
   local tabs = {}
   local i
-  -- ordered is a fixed six-slot model and may contain nil gaps. table.getn
+  -- ordered is a fixed seven-slot model and may contain nil gaps. table.getn
   -- stops at an implementation-defined boundary in a sparse table, which
-  -- omitted later secondary professions such as First Aid in slot six.
-  for i = 1, 6 do
+  -- omitted later secondary professions such as First Aid in slot seven.
+  for i = 1, prof.ROW_COUNT do
     local entry = rows.ordered[i]
     local spell = entry and entry.spells and entry.spells[1]
     if entry and prof.CRAFTING[entry.key] and spell then
@@ -379,8 +390,8 @@ function prof.Scan()
 
   local spells = prof.GeneralSpells()
   local list = { rows.primary[1], rows.primary[2], rows.poisons,
-                 rows.fishing, rows.cooking, rows.firstaid }
-  for i = 1, 6 do
+                 rows.survival, rows.fishing, rows.cooking, rows.firstaid }
+  for i = 1, prof.ROW_COUNT do
     if list[i] then list[i].spells = prof.FindSpells(list[i], spells) end
   end
   rows.ordered = list
@@ -662,15 +673,16 @@ end
 function prof.BuildFlatRow(page, top, primary, missingKey)
   local t = prof.Token()
   local cfg, barCfg = t.row, t.bar
+  local height = primary and cfg.height or cfg.secondaryHeight or cfg.height
   local row = { primary = primary and true or false, missingKey = missingKey }
 
   row.panel = U.CreatePanel(page, {
     width = cfg.width,
-    height = cfg.height,
+    height = height,
     background = cfg.background,
     border = M.color.border,
   })
-  prof.Place(row.panel, t.rowLeft, top, cfg.width, cfg.height)
+  prof.Place(row.panel, t.rowLeft, top, cfg.width, height)
 
   local textX = primary and cfg.primaryTextX or cfg.secondaryTextX
   if primary then
@@ -742,9 +754,10 @@ function prof.BuildFlatPage(page)
     prof.BuildFlatRow(page, t.primaryTop[1], true, "SPELLBOOK_PROF_FIRST"),
     prof.BuildFlatRow(page, t.primaryTop[2], true, "SPELLBOOK_PROF_SECOND"),
     prof.BuildFlatRow(page, t.secondaryTop[1], false, nil),
-    prof.BuildFlatRow(page, t.secondaryTop[2], false, "SPELLBOOK_PROF_FISHING"),
-    prof.BuildFlatRow(page, t.secondaryTop[3], false, "SPELLBOOK_PROF_COOKING"),
-    prof.BuildFlatRow(page, t.secondaryTop[4], false,
+    prof.BuildFlatRow(page, t.secondaryTop[2], false, nil),
+    prof.BuildFlatRow(page, t.secondaryTop[3], false, "SPELLBOOK_PROF_FISHING"),
+    prof.BuildFlatRow(page, t.secondaryTop[4], false, "SPELLBOOK_PROF_COOKING"),
+    prof.BuildFlatRow(page, t.secondaryTop[5], false,
                       "SPELLBOOK_PROF_FIRST_AID"),
   }
 end
@@ -840,9 +853,10 @@ function prof.BuildPage()
     -- Poisons is class-specific, so its row stays blank when missing, as
     -- DragonflightUI leaves its first secondary row.
     prof.BuildSecondary(page, t.secondaryTop[1], nil),
-    prof.BuildSecondary(page, t.secondaryTop[2], "SPELLBOOK_PROF_FISHING"),
-    prof.BuildSecondary(page, t.secondaryTop[3], "SPELLBOOK_PROF_COOKING"),
-    prof.BuildSecondary(page, t.secondaryTop[4], "SPELLBOOK_PROF_FIRST_AID"),
+    prof.BuildSecondary(page, t.secondaryTop[2], nil),
+    prof.BuildSecondary(page, t.secondaryTop[3], "SPELLBOOK_PROF_FISHING"),
+    prof.BuildSecondary(page, t.secondaryTop[4], "SPELLBOOK_PROF_COOKING"),
+    prof.BuildSecondary(page, t.secondaryTop[5], "SPELLBOOK_PROF_FIRST_AID"),
   }
   prof.page = page
 end
@@ -857,8 +871,8 @@ function prof.SetShown(region, shown)
 end
 
 -- Poisons is class-specific. On characters without it, remove its otherwise
--- empty outlined row and pull Fishing/Cooking/First Aid up by one slot. Keep
--- the slot in the data model so the native spell-button mapping stays stable.
+-- empty outlined row and pull Survival/Fishing/Cooking/First Aid up one slot.
+-- Keep the slot in the data model so native spell-button mapping stays stable.
 function prof.FlatSecondaryTop(rowIndex)
   local t = prof.Token()
   local topIndex = rowIndex - 2
@@ -876,12 +890,12 @@ function prof.LayoutFlatRows(rows)
 
   prof.flatPoisonsVisible = rows.ordered[3] and true or false
   local i
-  for i = 3, 6 do
+  for i = 3, prof.ROW_COUNT do
     local row = prof.rows[i]
     local top = prof.FlatSecondaryTop(i)
     if row and row.panel and top then
-      prof.Place(row.panel, t.rowLeft, top,
-                 t.row.width, t.row.height)
+      prof.Place(row.panel, t.rowLeft, top, t.row.width,
+                 t.row.secondaryHeight or t.row.height)
     end
   end
 end
@@ -949,9 +963,10 @@ end
 -- ---------------------------------------------------------------------------
 -- Native spell buttons
 --
--- Two per row, in row order: SpellButton1-2 on the first primary row through
--- SpellButton11-12 on First Aid. The mapping is keyed by each button's GetID,
--- the index SpellBook_GetSpellID is called with, which is not its name suffix
+-- Learned spells are packed into SpellButton1-12 in row order. Empty rows do
+-- not consume buttons, which leaves enough native click owners for Turtle
+-- WoW's extra Survival row. The mapping is keyed by each button's GetID, the
+-- index SpellBook_GetSpellID is called with, which is not its name suffix
 -- (knowledge.json / spellbook.rank_filter_native_mapping_unverified).
 -- ---------------------------------------------------------------------------
 function prof.ButtonPlace(rowIndex, position)
@@ -998,19 +1013,25 @@ end
 
 function prof.Assign(rows)
   prof.slotById, prof.placeByIndex = {}, {}
+  local index = 1
+  local limit = tonumber(U.G("SPELLS_PER_PAGE")) or 12
   local r
-  for r = 1, 6 do
+  for r = 1, prof.ROW_COUNT do
     local entry = rows.ordered[r]
     local spells = entry and entry.spells or {}
     local s
     for s = 1, 2 do
-      local index = (r - 1) * 2 + s
-      prof.placeByIndex[index] = prof.ButtonPlace(r, s)
-      local button = U.G("SpellButton" .. index)
       local spell = spells[s]
-      if button and spell and button.GetID then
-        local ok, id = pcall(button.GetID, button)
-        if ok and tonumber(id) then prof.slotById[tonumber(id)] = spell.slot end
+      if spell and index <= limit then
+        prof.placeByIndex[index] = prof.ButtonPlace(r, s)
+        local button = U.G("SpellButton" .. index)
+        if button and button.GetID then
+          local ok, id = pcall(button.GetID, button)
+          if ok and tonumber(id) then
+            prof.slotById[tonumber(id)] = spell.slot
+          end
+        end
+        index = index + 1
       end
     end
   end
@@ -1097,7 +1118,9 @@ function prof.Fill()
   prof.LayoutFlatRows(rows)
   prof.Assign(rows)
   local i
-  for i = 1, 6 do prof.FillRow(prof.rows[i], rows.ordered[i]) end
+  for i = 1, prof.ROW_COUNT do
+    prof.FillRow(prof.rows[i], rows.ordered[i])
+  end
 end
 
 -- After an unlearn, and on the skill/spell events that follow one. Neither

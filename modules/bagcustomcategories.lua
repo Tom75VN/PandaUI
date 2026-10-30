@@ -4,7 +4,7 @@
 -- (Components/Categories.lua, Categories.Ui.lua, Config/RuleFunctions.lua): a
 -- name, a priority, rules and an item list. An item in the list, or one that
 -- passes the rules, is filed under the category instead of its built-in one,
--- and the lowest priority number is tried first. The bag, live bank and saved
+-- and the highest priority number is tried first. The bag, live bank and saved
 -- bank category views read it through U.CustomItemCategory
 -- (modules/bagcategoryview.lua).
 --
@@ -223,7 +223,7 @@ function CC.Compiled()
     end
   end
   table.sort(list, function(a, b)
-    if a.cat.priority ~= b.cat.priority then return a.cat.priority < b.cat.priority end
+    if a.cat.priority ~= b.cat.priority then return a.cat.priority > b.cat.priority end
     return a.cat.id < b.cat.id
   end)
 
@@ -707,6 +707,41 @@ function CC.Label(parent, key, color)
   return label
 end
 
+-- A "?" beside a label whose hover explains the setting. The locale string is
+-- one tooltip line per "\n": the tooltip does not wrap, so lines stay short.
+function CC.HelpMark(parent, titleKey, tipKey)
+  local mark = CreateFrame("Button", nil, parent)
+  mark:SetWidth(14)
+  mark:SetHeight(16)
+  pcall(mark.EnableMouse, mark, true)
+  mark.text = U.CreateLabel(mark, {
+    size = M.fontSize.small, color = M.color.textDim,
+    inherits = "GameFontNormalSmall", justify = "CENTER",
+  })
+  if mark.text then
+    mark.text:SetPoint("CENTER", mark, "CENTER", 0, 0)
+    mark.text:SetText("?")
+  end
+  mark:SetScript("OnEnter", function()
+    if mark.text then pcall(mark.text.SetTextColor, mark.text, M.Unpack(M.color.accent)) end
+    if type(U.ShowInfoTooltip) ~= "function" then return end
+    local lines = { { U.L(titleKey), M.color.accent } }
+    local rest = U.L(tipKey)
+    while rest and rest ~= "" do
+      local cut = string.find(rest, "\n", 1, true)
+      local line = cut and string.sub(rest, 1, cut - 1) or rest
+      rest = cut and string.sub(rest, cut + 1) or nil
+      table.insert(lines, { line, M.color.text })
+    end
+    U.ShowInfoTooltip(mark, lines)
+  end)
+  mark:SetScript("OnLeave", function()
+    if mark.text then pcall(mark.text.SetTextColor, mark.text, M.Unpack(M.color.textDim)) end
+    U.HideInfoTooltip()
+  end)
+  return mark
+end
+
 function CC.Button(parent, key, width, onClick)
   local button = U.CreateButton(parent, {
     text = U.L(key), width = width, height = 22, size = M.fontSize.small,
@@ -716,12 +751,14 @@ function CC.Button(parent, key, width, onClick)
   return button
 end
 
-function CC.Dropdown(parent, width, onChange)
+function CC.Dropdown(parent, width, onChange, name)
   local control = U.CreateDropdown(parent, {
-    width = width, height = 24, rowHeight = 18,
+    name = name, width = width, height = 24, rowHeight = 18,
     items = { { text = "", value = 0 } },
     onChange = onChange,
   })
+  -- Read by PandaRuntimeProbe's catdropdown group.
+  if name and control.button then control.button.puiControl = control end
   table.insert(CC.ui.styled, control)
   return control
 end
@@ -926,7 +963,8 @@ function CC.BuildBody(parent)
   end)
 
   ui.priorityLabel = CC.Label(body, "CUSTOMCAT_PRIORITY")
-  ui.priority = U.CreateSlider(body, {
+  ui.priorityHelp = CC.HelpMark(body, "CUSTOMCAT_PRIORITY", "CUSTOMCAT_PRIORITY_TIP")
+  ui.priority =U.CreateSlider(body, {
     text = "", width = 200, min = 1, max = 100, step = 1, value = 50,
     onChange = function(value)
       if ui.loading then return end
@@ -936,15 +974,17 @@ function CC.BuildBody(parent)
   table.insert(ui.styled, ui.priority)
 
   ui.matchLabel = CC.Label(body, "CUSTOMCAT_MATCH")
+  ui.matchHelp = CC.HelpMark(body, "CUSTOMCAT_MATCH", "CUSTOMCAT_MATCH_TIP")
   ui.match = CC.Dropdown(body, 200, function(value)
     CC.Edit(function(cat) cat.mode = value end)
-  end)
+  end, "PandaUISettingsCustomCatMatch")
   ui.match.SetItems({
     { text = U.L("CUSTOMCAT_MATCH_ALL"), value = "all" },
     { text = U.L("CUSTOMCAT_MATCH_ANY"), value = "any" },
   })
 
   ui.rulesLabel = CC.Label(body, "CUSTOMCAT_RULES", M.color.accent)
+  ui.rulesHelp = CC.HelpMark(body, "CUSTOMCAT_RULES", "CUSTOMCAT_RULES_TIP")
   local i
   for i = 1, CC.MAX_RULES do ui.rows[i] = CC.BuildRuleRow(body, i) end
   ui.addRule = CC.Button(body, "CUSTOMCAT_ADD_RULE", 110, function()
@@ -990,6 +1030,19 @@ function CC.BuildBody(parent)
   end)
 end
 
+-- Sits right after the label's text, inside the label's 86 px column.
+function CC.PlaceHelp(mark, label, y)
+  if not mark then return end
+  local x = 70
+  if label then
+    local ok, width = pcall(label.GetStringWidth, label)
+    width = ok and tonumber(width) or nil
+    if width and width > 0 then x = math.min(width + 1, 72) end
+  end
+  mark:ClearAllPoints()
+  mark:SetPoint("LEFT", CC.ui.body, "TOPLEFT", x, y)
+end
+
 -- Places every body control from the top down; returns the body's height.
 function CC.LayoutBody(cat)
   local ui = CC.ui
@@ -1012,6 +1065,7 @@ function CC.LayoutBody(cat)
   y = y - 34
 
   Row(ui.priorityLabel, 6)
+  CC.PlaceHelp(ui.priorityHelp, ui.priorityLabel, y - 6)
   ui.priority.SetPoint("LEFT", body, "TOPLEFT", 90, y - 6)
   ui.loading = true
   ui.priority.SetValue(cat.priority)
@@ -1019,11 +1073,13 @@ function CC.LayoutBody(cat)
   y = y - 40
 
   Row(ui.matchLabel)
+  CC.PlaceHelp(ui.matchHelp, ui.matchLabel, y - 12)
   ui.match.SetPoint("LEFT", body, "TOPLEFT", 90, y - 12)
   ui.match.SetValue(cat.mode, false)
   y = y - 36
 
   Row(ui.rulesLabel, 8)
+  CC.PlaceHelp(ui.rulesHelp, ui.rulesLabel, y - 8)
   y = y - 20
   local i
   for i = 1, CC.MAX_RULES do
@@ -1081,7 +1137,6 @@ function CC.RefreshPicker()
     items = { { text = U.L("CUSTOMCAT_NONE"), value = 0 } }
   end
   ui.pick.SetItems(items, ui.selected or 0)
-  ui.pick.SetEnabled(ui.selected ~= nil)
   local full = table.getn(list) >= CC.MAX_CATEGORIES
   if full then ui.new:Disable() else ui.new:Enable() end
   if ui.selected and not full then ui.copy:Enable() else ui.copy:Disable() end
@@ -1144,7 +1199,7 @@ function U.BuildBagCustomCategoryEditor(parent, anchor)
   ui.pick = CC.Dropdown(bar, 200, function(value)
     ui.selected = value ~= 0 and value or nil
     CC.Refresh()
-  end)
+  end, "PandaUISettingsCustomCatPick")
   ui.pick.SetPoint("LEFT", bar, "LEFT", 0, 0)
   ui.new = CC.Button(bar, "CUSTOMCAT_NEW", 70, CC.New)
   ui.new:SetPoint("LEFT", bar, "LEFT", 208, 0)

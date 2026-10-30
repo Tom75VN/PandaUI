@@ -1090,7 +1090,10 @@ function U.CreateDropdown(parent, options)
     control.SetOpen(false)
     local k
     for k = table.getn(items), 1, -1 do table.remove(items, k) end
-    for k = 1, table.getn(newItems or {}) do items[k] = newItems[k] end
+    -- table.insert, not items[k] = ...: table.remove left the recorded length
+    -- at 0 and an indexed write does not raise it, so table.getn(items) would
+    -- stay 0 (lua50.getn_stale_after_nil_clear).
+    for k = 1, table.getn(newItems or {}) do table.insert(items, newItems[k]) end
     local rows = {}
     for k = 1, table.getn(items) do
       local item = items[k]

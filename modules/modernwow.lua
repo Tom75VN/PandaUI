@@ -4077,9 +4077,9 @@ end
 -- overlay alpha; nil for a race with no imported background.
 -- UnitRace's third return: MEASURED_RUNTIME
 -- (knowledge: unit.race_class_return_numeric_id).
-function mw.CharacterSceneRace()
+function mw.CharacterSceneRace(unit)
   local token = M.modernWow.characterScene
-  local ok, _, file, id = pcall(UnitRace, "player")
+  local ok, _, file, id = pcall(UnitRace, unit or "player")
   if not ok then return nil end
   local key = token.raceById[tonumber(id) or 0]
   if not key and type(file) == "string" then
@@ -4104,26 +4104,32 @@ end
 -- the opaque rows of the art (the lower pair turns transparent where it
 -- stopped), so the result is the same. Built hidden; mw.PlaceCharacterScene
 -- anchors it. Nothing here takes the mouse.
-function mw.BuildCharacterScene(housing)
+function mw.BuildCharacterScene(housing, unit, ensureBackground)
   local token = M.modernWow.characterScene
   local tex, bg, b = token.texture, token.background, token.border
-  local s = { background = {} }
+  local s = { background = {}, pieces = {} }
 
   local function Piece(layer, path, coords)
-    return mw.HousingPiece(housing, layer, path, coords)
+    local piece = mw.HousingPiece(housing, layer, path, coords)
+    if piece then table.insert(s.pieces, piece) end
+    return piece
   end
 
   -- The four pieces Retail draws are one stitched texture here: drawn apart
   -- their seams showed a dark line, and overlapping them distorted the art
   -- (user reports, 2026-09-29).
-  local race, alpha = mw.CharacterSceneRace()
-  if race then
-    local shade = ((1 - alpha) * token.brightness) ^ (1 / token.shadeGamma)
-    local piece = Piece("ARTWORK", tex.dressup .. race, bg.coords)
+  local race, alpha = mw.CharacterSceneRace(unit)
+  if race or ensureBackground then
+    local initialRace = race or "human"
+    local piece = Piece("ARTWORK", tex.dressup .. initialRace, bg.coords)
     piece:SetWidth(bg.width)
     piece:SetHeight(bg.height)
-    pcall(piece.SetDesaturated, piece, true)
-    U.SetColor(piece, shade, shade, shade, 1)
+    if race then
+      local shade = ((1 - alpha) * token.brightness) ^
+                    (1 / token.shadeGamma)
+      pcall(piece.SetDesaturated, piece, true)
+      U.SetColor(piece, shade, shade, shade, 1)
+    end
     s.background[1] = piece
   end
 
@@ -4161,21 +4167,48 @@ function mw.BuildCharacterScene(housing)
   return s
 end
 
+-- Inspect reuses the paper-doll scene for a different unit each time the
+-- window opens. Keep the stitched background region and swap only its race
+-- texture and Retail-equivalent shade; Character continues to pass player.
+function mw.RefreshCharacterSceneRace(scene, unit)
+  local piece = scene and scene.background and scene.background[1]
+  if not piece then return false end
+
+  local token = M.modernWow.characterScene
+  local race, alpha = mw.CharacterSceneRace(unit)
+  if not race then
+    pcall(piece.Hide, piece)
+    return false
+  end
+
+  local shade = ((1 - alpha) * token.brightness) ^ (1 / token.shadeGamma)
+  pcall(function()
+    piece:SetTexture(token.texture.dressup .. race)
+    piece:SetTexCoord(token.background.coords[1], token.background.coords[2],
+                      token.background.coords[3], token.background.coords[4])
+    piece:SetDesaturated(true)
+    U.SetColor(piece, shade, shade, shade, 1)
+    piece:Show()
+  end)
+  return true
+end
+
 -- Retail's Inset as this client's slots place it (M.modernWow.characterScene
 -- `slot`), as left, top, right and bottom offsets from CharacterFrame's
 -- top-left (y downwards), plus whether it was measured. Only bounded numbers
 -- are read off the slots; nothing is anchored to them. Unreadable slots give
 -- the housing's own inset, which is Retail's.
-function mw.CharacterSceneInset(frame)
+function mw.CharacterSceneInset(frame, prefix)
   local w = M.modernWow.characterWindow
   local slot = M.modernWow.characterScene.slot
+  prefix = prefix or "Character"
   local frameLeft = mw.Dimension(frame, "GetLeft")
   local frameTop = mw.Dimension(frame, "GetTop")
-  local head = U.G("CharacterHeadSlot")
-  local main = U.G("CharacterMainHandSlot")
+  local head = U.G(prefix .. "HeadSlot")
+  local main = U.G(prefix .. "MainHandSlot")
   local headLeft = mw.Dimension(head, "GetLeft")
   local headTop = mw.Dimension(head, "GetTop")
-  local handsRight = mw.Dimension(U.G("CharacterHandsSlot"), "GetRight")
+  local handsRight = mw.Dimension(U.G(prefix .. "HandsSlot"), "GetRight")
   local mainTop = mw.Dimension(main, "GetTop")
   local mainBottom = mw.Dimension(main, "GetBottom")
   if frameLeft > 0 and frameTop > 0 and headLeft > 0 and headTop > 0 and
@@ -4193,13 +4226,16 @@ end
 
 -- Anchors the scene from that Inset with PaperDollFrame.xml's offsets. Runs
 -- on every expand until a measurement succeeds, then keeps it.
-function mw.PlaceCharacterScene(frame, housing)
+function mw.PlaceCharacterScene(frame, housing, prefix, unit)
   local s = housing.scene
-  if not s or s.measured then return end
+  if not s then return end
+  mw.RefreshCharacterSceneRace(s, unit)
+  if s.measured then return end
   local token = M.modernWow.characterScene
   local bg, b = token.background, token.border
   local w = M.modernWow.characterWindow
-  local left, top, right, bottom, measured = mw.CharacterSceneInset(frame)
+  local left, top, right, bottom, measured =
+    mw.CharacterSceneInset(frame, prefix)
   -- The chrome's top-left is the window's in both states.
   local chrome = housing.chrome
 
@@ -4423,8 +4459,8 @@ end
 -- The class icon (mw.ClassIcon's own region on the chrome, ARTWORK) moves
 -- into the Retail ring while the housing shows; mw.CharacterClassIcon puts it
 -- back in the quadrants' ring.
-function mw.PlaceHousingPortrait(state)
-  local icon = state.classIcon
+function mw.PlaceHousingPortrait(state, key)
+  local icon = state[key or "classIcon"]
   if not icon then return end
   local token = M.modernWow.characterWindow
   local p = token.portrait
@@ -5261,13 +5297,159 @@ function mw.BuildCharacter()
   mw.BuildInspect()
 end
 
+-- Inspect uses Character's collapsed-width paper-doll housing, including the
+-- race scene and inner model ring, without Character's statistics side pane.
+function mw.BuildInspectHousing(frame, state)
+  local token = M.modernWow.characterWindow
+  local width, height = token.width, token.height
+  local housing = { chrome = state.chrome, pieces = {} }
+  mw.BuildHousingBody(housing, width, height)
+  local inset = token.inset
+  mw.BuildHousingInset(housing, inset.left, inset.top,
+                       width - inset.right, height - inset.bottom)
+  housing.scene = mw.BuildCharacterScene(housing, frame and frame.unit, true)
+  mw.BuildHousingMetal(housing, width, height)
+  return housing
+end
+
+function mw.EnsureInspectHousing(frame)
+  local state = frame and frame.puiModernWowWindow
+  if not state or not state.chrome or not state.quadrants then return nil end
+  if not state.inspectHousing and not state.inspectHousingFailed then
+    local ok, housing = pcall(mw.BuildInspectHousing, frame, state)
+    if ok and housing then
+      state.inspectHousing = housing
+    else
+      U.Error("inspect housing: " .. tostring(housing))
+      state.inspectHousingFailed = true
+    end
+  end
+  return state.inspectHousing
+end
+
+function mw.PlaceInspectHeader(frame)
+  local token = M.modernWow.characterWindow
+  local title = token.title
+  local name = U.G("InspectNameText")
+  local close = U.G("InspectFrameCloseButton")
+  if name then
+    pcall(function()
+      name:ClearAllPoints()
+      name:SetPoint("TOP", frame, "TOPLEFT",
+                    token.left + (title.left + token.width - title.right) / 2,
+                    -(token.top + title.inspectTop))
+    end)
+  end
+  if close then
+    pcall(function()
+      close:ClearAllPoints()
+      close:SetPoint("TOPRIGHT", frame, "TOPLEFT",
+                     token.left + token.width - token.close.right,
+                     -(token.top + token.close.top))
+    end)
+  end
+end
+
+-- The Turtle client creates the Talent tab only after InspectFrame's first
+-- OnShow returns. Style the complete native group once that final tab exists,
+-- then re-chain the visible tabs on every refresh. Their native anchors were
+-- authored for wider template buttons, so keeping them after the shared label
+-- sizing leaves a wide gap before Arena and an overlap at Talents.
+function mw.StyleInspectTabs(frame)
+  if not frame then return end
+  local talents = U.G("InspectTalentsFrame")
+  local idOk, talentId = false, nil
+  if talents and talents.GetID then
+    idOk, talentId = pcall(talents.GetID, talents)
+  end
+  talentId = idOk and tonumber(talentId) or nil
+  if not talentId or not U.G("InspectFrameTab" .. talentId) then return end
+
+  local tabs, visible, selected, i = {}, {}, 1, nil
+  local nativeSelected = tonumber(frame.selectedTab)
+  for i = 1, talentId do
+    local tab = U.G("InspectFrameTab" .. i)
+    if tab then
+      table.insert(tabs, tab)
+      if nativeSelected == i then selected = table.getn(tabs) end
+      local shownOk, shown = pcall(tab.IsShown, tab)
+      if shownOk and shown then table.insert(visible, tab) end
+    end
+  end
+
+  if not frame.puiModernWowInspectTabs then
+    U.StyleStockTabGroup(tabs, selected)
+    for i = 1, table.getn(tabs) do
+      local tab = tabs[i]
+      mw.DressTab(tab)
+      U.PostHookScript(tab, "OnClick", function()
+        U.DeferOnce("inspect.modernwow-tab", function()
+          mw.RefreshInspectHousing(frame)
+        end)
+      end)
+    end
+    frame.puiModernWowInspectTabs = true
+  end
+
+  U.ChainStockTabs(visible, 3)
+  local panel = U.G(mw.inspect.panel)
+  if panel then
+    U.FitStockTabStrip(visible, frame, {
+      gap = 3,
+      left = 10,
+      right = 30,
+      padding = M.modernWow.tab.padding,
+      minPadding = 4,
+      anchor = {
+        frame = panel,
+        point = "TOPLEFT",
+        relativePoint = "BOTTOMLEFT",
+        x = 5,
+        y = 2,
+      },
+    })
+  end
+end
+
+function mw.RefreshInspectHousing(frame)
+  local state = frame and frame.puiModernWowWindow
+  local housing = mw.EnsureInspectHousing(frame)
+  if not state or not housing then return false end
+
+  mw.SizeHousingChrome(frame, state, false)
+  local i
+  for i = 1, table.getn(mw.characterQuadrants) do
+    local piece = state.quadrants[mw.characterQuadrants[i]]
+    if piece then pcall(piece.Hide, piece) end
+  end
+  mw.ShowHousingPieces(housing, true)
+  mw.PlaceCharacterScene(frame, housing, "Inspect", frame.unit)
+  local paperDoll = U.G("InspectPaperDollFrame")
+  local paperOk, paperShown = false, false
+  if paperDoll and paperDoll.IsShown then
+    paperOk, paperShown = pcall(paperDoll.IsShown, paperDoll)
+  end
+  if not paperOk or not paperShown then
+    local scenePieces = housing.scene and housing.scene.pieces
+    if scenePieces then
+      for i = 1, table.getn(scenePieces) do
+        pcall(scenePieces[i].Hide, scenePieces[i])
+      end
+    end
+  end
+  mw.InspectClassIcon(frame)
+  mw.PlaceHousingPortrait(state, "inspectClassIcon")
+  mw.PlaceInspectHeader(frame)
+  mw.StyleInspectTabs(frame)
+  return true
+end
+
 function mw.BuildInspect()
   local entry = mw.inspect
   local frame = U.G(entry.window.name)
   if not frame then return false end
   if frame.puiModernWowInspectBuilt then
-    mw.InspectClassIcon(frame)
-    return true
+    return mw.RefreshInspectHousing(frame)
   end
   if not frame.puiModernWowWindow and not mw.DressWindow(frame, entry.window) then
     error("modern-wow Inspect texture could not be applied")
@@ -5276,7 +5458,6 @@ function mw.BuildInspect()
   local panel = U.G(entry.panel)
   if panel then mw.HideFlatSurface(panel) end
 
-  mw.InspectClassIcon(frame)
   mw.DressGearSlots(frame, "Inspect", entry.slots,
                     "InspectPaperDollItemSlotButton_Update",
                     "modernwow.inspect-gear-slots")
@@ -5284,10 +5465,14 @@ function mw.BuildInspect()
   mw.DressCloseButton("InspectFrameCloseButton")
 
   local paperDoll = U.G("InspectPaperDollFrame")
-  U.PostHookScript(frame, "OnShow", function() mw.InspectClassIcon(frame) end)
-  U.PostHookScript(paperDoll, "OnShow", function() mw.InspectClassIcon(frame) end)
+  U.PostHookScript(frame, "OnShow", function()
+    mw.RefreshInspectHousing(frame)
+  end)
+  U.PostHookScript(paperDoll, "OnShow", function()
+    mw.RefreshInspectHousing(frame)
+  end)
   frame.puiModernWowInspectBuilt = true
-  return true
+  return mw.RefreshInspectHousing(frame)
 end
 
 function U.ModernWowDressInspect()

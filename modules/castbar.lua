@@ -1422,7 +1422,7 @@ local function ApplyIdlePlaceholder()
 end
 
 -- Craft dock. While a profession window is open, a craft cast moves the player
--- bar to the left of that window's Create All button (user request,
+-- bar to the left of that window's Create or Create All button (user request,
 -- 2026-09-16); it returns to its mover position when the window closes, a
 -- non-craft cast starts, or edit mode opens. The anchor is the addon-owned
 -- button modules/professions.lua hands out, never a native child

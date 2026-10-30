@@ -4,6 +4,36 @@ Player-visible PandaUI changes, newest first. Keep every bullet short, clear and
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-10-30
+
+### Added
+
+- Turtle WoW Jewelcrafting and Survival appear in Professions and crafting tabs.
+- Modern WoW edit mode lets the Minimap anchor switch between circle and square.
+- Right-click the grouped minimap icon for Modern WoW controls, hover and outside-click closing.
+- The bag header has a settings button that opens the bag settings page.
+- Custom category settings show a "?" beside Priority, Match and Rules that explains how to use them.
+- Browse the bags and bank of your other characters on this account.
+
+### Changed
+
+- The grouped minimap icon flyout now uses the right-click menu border.
+- Modern inspection uses working flat tabs and contained Arena and Talent panels.
+- Modern WoW inspection aligns its title and tabs with a character-only model scene.
+
+### Fixed
+
+- Enchanting and Beast Training cast bars no longer hide behind their crafting window.
+- Player inspection keeps its gear tab available after viewing talents.
+- Crafting profession portraits now display clean circular icons.
+- Raid group borders now fit the complete group frame, including its title row.
+- Custom category dropdowns now show their entries and the selected name.
+- Custom category priority now works as expected: the highest number wins.
+
+### Removed
+
+- Opening the World Map no longer shows the misplaced player ping.
+
 ## [0.13.1] - 2026-10-29
 
 ### Added
