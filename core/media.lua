@@ -2150,7 +2150,13 @@ M.modernWow.spellBook.professions = {
 
   rowLeft = 73,
   primaryTop = { 42, 135 },
-  secondaryTop = { 231, 284, 337, 390, 443 },
+  -- The page art carries four secondary slots (eye, fish, cooking, aid) at
+  -- this 57-texel step; up to four shown rows sit on them, bottom-aligned.
+  -- A fifth (Turtle WoW's Survival learned beside Poisons) cannot fit that
+  -- step, so all five share the art's height at `secondaryCompactStep` with
+  -- `secondary.compact` offsets (user request, 2026-10-30).
+  secondaryTop = { 238, 295, 352, 409 },
+  secondaryCompactStep = 43,
 
   ring = { x = 7, y = 7, size = 72, icon = 50 },
   primary = { nameY = 10, rankY = 32, barX = 114, barY = 54,
@@ -2158,12 +2164,18 @@ M.modernWow.spellBook.professions = {
               missingWidth = 250 },
   secondary = { nameY = 4, rankY = 18, barX = 16, barY = 31,
                 missingX = 4, missingY = 16,
-                missingTextX = 255, missingWidth = 245 },
+                missingTextX = 255, missingWidth = 245,
+                -- Gap between the name and the rank that follows it.
+                rankGap = 6,
+                compact = { nameY = 2, rankY = 15, barY = 28, missingY = 13 } },
   -- The bar's end pieces sit outside its 95x16 run, lifted `capLift`.
   -- `textInset` is the skill value's left inset inside the bar; `textDrop`
   -- lowers it from the caps' lift, in window units (user request, 2026-09-15).
+  -- 0 centres it on the visible bar: the fill art is opaque in its top 12 of
+  -- 16 rows and the track spans y - capLift .. y + 14, both centred on y + 6
+  -- (alpha measured off the TGAs; user request, 2026-10-30).
   bar = { width = 95, height = 16, cap = 16, capLift = 2, endCap = 12,
-          textInset = 5, textDrop = 2 },
+          textInset = 5, textDrop = 0 },
   -- Primary-row unlearn button: DragonflightUI's 26-unit glyph at scale .7,
   -- its right edge 30 * .7 left of the bar and lifted 1 (page texels).
   unlearn = { size = 18, gap = 21, lift = 1, alpha = 0.75, hoverAlpha = 1,
@@ -2867,7 +2879,8 @@ M.modernWow.professions = {
   filter = {
     x = 5, y = 72, width = 274, height = 60, gap = 4,
     size = 20, reagentTop = 7,
-    dropdown = { x = 10, y = 8, width = 110, textY = -2 },
+    -- textY 1: the Difficulty label raised 3 from -2 (user request, 2026-10-30).
+    dropdown = { x = 10, y = 8, width = 110, textY = 1 },
     reagents = { x = 136, width = 138 },
     search = { x = 12, y = 29, right = 8 },
   },

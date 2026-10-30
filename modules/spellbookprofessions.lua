@@ -797,24 +797,46 @@ function prof.BuildPrimary(page, top, missingKey)
   return row
 end
 
-function prof.BuildSecondary(page, top, missingKey)
+-- Positions one secondary row's regions from its top, with the standard or the
+-- compact offsets (see M.modernWow.spellBook.professions.secondary).
+function prof.PlaceSecondary(row, top, compact)
   local t = prof.Token()
   local cfg = t.secondary
+  local o = compact and cfg.compact or cfg
   local x = t.rowLeft
   local textX = x + cfg.barX - t.bar.cap
+  local barX, barY = x + cfg.barX, top + o.barY
+
+  prof.Place(row.name, textX, top + o.nameY)
+  -- The rank (Apprentice...) follows the name on its line, bottoms aligned.
+  local kx = prof.host.PageScale()
+  if kx then
+    pcall(function()
+      row.rank:ClearAllPoints()
+      row.rank:SetPoint("BOTTOMLEFT", row.name, "BOTTOMRIGHT",
+                        cfg.rankGap * kx, 1)
+    end)
+  end
+  prof.Place(row.bar, barX, barY)
+  local trackY = barY - t.bar.capLift
+  prof.Place(row.bar.track[1], barX - t.bar.cap, trackY, t.bar.cap, t.bar.cap)
+  prof.Place(row.bar.track[2], barX, trackY, t.bar.width, t.bar.cap)
+  prof.Place(row.bar.track[3], barX + t.bar.width, trackY, t.bar.cap, t.bar.cap)
+  prof.Place(row.missingHeader, x + cfg.missingX, top + o.missingY)
+  prof.Place(row.missingText, cfg.missingTextX, top + o.missingY)
+end
+
+function prof.BuildSecondary(page, top, missingKey)
+  local t = prof.Token()
   local row = { missingKey = missingKey }
 
   row.name = prof.Text(page, M.fontSize.normal, t.nameColor)
-  prof.Place(row.name, textX, top + cfg.nameY)
   row.rank = prof.Text(page, M.fontSize.tiny, t.rankColor)
-  prof.Place(row.rank, textX, top + cfg.rankY)
-  row.bar = prof.BuildBar(page, x + cfg.barX, top + cfg.barY)
-
+  row.bar = prof.BuildBar(page, 0, 0)
   row.missingHeader = prof.Text(page, M.fontSize.large, t.missingHeaderColor)
-  prof.Place(row.missingHeader, x + cfg.missingX, top + cfg.missingY)
   row.missingText = prof.Text(page, M.fontSize.small, t.missingTextColor,
-                              cfg.missingWidth)
-  prof.Place(row.missingText, cfg.missingTextX, top + cfg.missingY)
+                              t.secondary.missingWidth)
+  prof.PlaceSecondary(row, top, false)
   return row
 end
 
@@ -853,10 +875,10 @@ function prof.BuildPage()
     -- Poisons is class-specific, so its row stays blank when missing, as
     -- DragonflightUI leaves its first secondary row.
     prof.BuildSecondary(page, t.secondaryTop[1], nil),
-    prof.BuildSecondary(page, t.secondaryTop[2], nil),
-    prof.BuildSecondary(page, t.secondaryTop[3], "SPELLBOOK_PROF_FISHING"),
-    prof.BuildSecondary(page, t.secondaryTop[4], "SPELLBOOK_PROF_COOKING"),
-    prof.BuildSecondary(page, t.secondaryTop[5], "SPELLBOOK_PROF_FIRST_AID"),
+    prof.BuildSecondary(page, t.secondaryTop[1], nil),
+    prof.BuildSecondary(page, t.secondaryTop[2], "SPELLBOOK_PROF_FISHING"),
+    prof.BuildSecondary(page, t.secondaryTop[3], "SPELLBOOK_PROF_COOKING"),
+    prof.BuildSecondary(page, t.secondaryTop[4], "SPELLBOOK_PROF_FIRST_AID"),
   }
   prof.page = page
 end
@@ -897,6 +919,36 @@ function prof.LayoutFlatRows(rows)
       prof.Place(row.panel, t.rowLeft, top, t.row.width,
                  t.row.secondaryHeight or t.row.height)
     end
+  end
+end
+
+-- Book page: the shown secondary rows (Poisons and Survival only when learned,
+-- the other three always) take the art's four slots from the bottom up. With
+-- five shown they share the same height at the compact step instead.
+function prof.LayoutBookRows(rows)
+  local t = prof.Token()
+  if t.flat or not t.secondaryCompactStep then return end
+
+  local shown, i = {}, 0
+  for i = 3, prof.ROW_COUNT do
+    if rows.ordered[i] or (prof.rows[i] and prof.rows[i].missingKey) then
+      table.insert(shown, i)
+    end
+  end
+  local count = table.getn(shown)
+  local slots = table.getn(t.secondaryTop)
+  local compact = count > slots
+
+  prof.secondaryTops = {}
+  for i = 1, count do
+    local top
+    if compact then
+      top = t.secondaryTop[1] + (i - 1) * t.secondaryCompactStep
+    else
+      top = t.secondaryTop[slots - count + i]
+    end
+    prof.secondaryTops[shown[i]] = top
+    prof.PlaceSecondary(prof.rows[shown[i]], top, compact)
   end
 end
 
@@ -983,7 +1035,8 @@ function prof.ButtonPlace(rowIndex, position)
     y = t.primaryTop[rowIndex] + (position == 1 and cfg.primaryY or cfg.y)
   else
     x = position == 1 and cfg.x or cfg.leftX
-    y = t.secondaryTop[rowIndex - 2] + cfg.y
+    y = (prof.secondaryTops and prof.secondaryTops[rowIndex] or
+         t.secondaryTop[1]) + cfg.y
   end
 
   local left, top = prof.host.PagePoint(x, y)
@@ -1116,6 +1169,7 @@ end
 function prof.Fill()
   local rows = prof.Scan()
   prof.LayoutFlatRows(rows)
+  prof.LayoutBookRows(rows)
   prof.Assign(rows)
   local i
   for i = 1, prof.ROW_COUNT do

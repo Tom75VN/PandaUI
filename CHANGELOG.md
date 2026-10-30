@@ -29,6 +29,9 @@ Player-visible PandaUI changes, newest first. Keep every bullet short, clear and
 - Raid group borders now fit the complete group frame, including its title row.
 - Custom category dropdowns now show their entries and the selected name.
 - Custom category priority now works as expected: the highest number wins.
+- The Modern WoW Professions page fits its background with Turtle WoW's Survival.
+- Modern WoW secondary professions show the rank beside the name, and skill values are centred on their bars.
+- The Modern WoW crafting window's Difficulty filter text sits 3 higher.
 
 ### Removed
 
