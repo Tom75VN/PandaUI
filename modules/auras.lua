@@ -1024,6 +1024,32 @@ local function PlaceIcon(row, icon, slot, size, spacing, perRow, below)
   local line = math.floor((slot - 1) / perRow)
 
   icon:ClearAllPoints()
+  if row.nameplate then
+    local corner = row.nameplateCorner or "TOPLEFT"
+    local right = corner == "TOPRIGHT" or corner == "BOTTOMRIGHT"
+    local bottom = corner == "BOTTOMLEFT" or corner == "BOTTOMRIGHT"
+    if bottom then
+      if right then
+        icon:SetPoint("TOPRIGHT", row, "TOPRIGHT",
+                      -column * (size + spacing),
+                      -line * (size + spacing))
+      else
+        icon:SetPoint("TOPLEFT", row, "TOPLEFT",
+                      column * (size + spacing),
+                      -line * (size + spacing))
+      end
+    elseif right then
+      icon:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT",
+                    -column * (size + spacing),
+                    line * (size + spacing))
+    else
+      icon:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT",
+                    column * (size + spacing),
+                    line * (size + spacing))
+    end
+    return
+  end
+
   if below then
     icon:SetPoint("TOPLEFT", row, "TOPLEFT",
                   column * (size + spacing),
@@ -1049,9 +1075,26 @@ local function PositionRow(row, below, offset)
 
   -- Nameplate rows (U.CreateNameplateAuraRows) ride the plate's health bar.
   if row.nameplate then
+    local corner = type(U.NameplateSetting) == "function" and
+                   U.NameplateSetting("auraPosition") or "TOPLEFT"
+    if corner ~= "TOPLEFT" and corner ~= "TOPRIGHT" and
+       corner ~= "BOTTOMLEFT" and corner ~= "BOTTOMRIGHT" then
+      corner = "TOPLEFT"
+    end
+    row.nameplateCorner = corner
+    local right = corner == "TOPRIGHT" or corner == "BOTTOMRIGHT"
+    local bottom = corner == "BOTTOMLEFT" or corner == "BOTTOMRIGHT"
+    local gap = type(U.NameplateSetting) == "function" and
+                tonumber(U.NameplateSetting("auraGap")) or nil
+    local distance = (gap or row.anchorOffsetY or 0) + offset
     row:ClearAllPoints()
-    row:SetPoint("BOTTOMLEFT", row.anchor, "TOPLEFT", 0,
-                 (row.anchorOffsetY or 0) + offset)
+    if bottom then
+      row:SetPoint(right and "TOPRIGHT" or "TOPLEFT", row.anchor,
+                   right and "BOTTOMRIGHT" or "BOTTOMLEFT", 0, -distance)
+    else
+      row:SetPoint(right and "BOTTOMRIGHT" or "BOTTOMLEFT", row.anchor,
+                   right and "TOPRIGHT" or "TOPLEFT", 0, distance)
+    end
     return
   end
 

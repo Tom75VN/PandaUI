@@ -885,12 +885,19 @@ end
 -- MerchantItem1 itself is never moved: the first occupied row is pinned to its
 -- native position instead, so the vendor grid can be rebuilt from it without
 -- reading GetPoint (whose Y sign is contested in knowledge.json).
+--
+-- Only empty rows are hidden. Hiding an occupied row, even for one refresh,
+-- fires OnLeave under the cursor and re-fires OnEnter when it reappears; the
+-- tooltip hook below refreshes on OnEnter, so hovered rows looped every frame
+-- and lost both their tooltip and their click.
 local function LayoutBuybackRows(occupied)
   local first = G("MerchantItem1")
+  local keep = {}
   local i
+  for i = 1, table.getn(occupied) do keep[occupied[i]] = true end
   for i = 1, ITEM_ROWS do
     local row = G("MerchantItem" .. i)
-    if row then pcall(row.Hide, row) end
+    if row and not keep[row] then pcall(row.Hide, row) end
   end
 
   for i = 1, table.getn(occupied) do
@@ -1044,8 +1051,11 @@ local function HookItemTooltip(itemButton)
       local infoOk, name = pcall(getInfo, index)
       if not infoOk or type(name) ~= "string" then return end
 
-      local quality = itemButton.puiBuybackQuality or QualityFromTooltip(name)
-      if quality then
+      -- Refresh only when hovering resolves a new quality: a refresh per
+      -- OnEnter re-lays out the rows under the cursor.
+      local known = itemButton.puiBuybackQuality
+      local quality = known or QualityFromTooltip(name)
+      if quality and not known then
         itemButton.puiBuybackQuality = quality
         RefreshBuybackRarity()
       end

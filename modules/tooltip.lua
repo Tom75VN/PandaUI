@@ -15,14 +15,9 @@
 -- tooltips inherit the same flat look. Only the *text* rebuild is gated on a
 -- player mouseover; item and action tooltip contents are never touched.
 --
--- This module is deliberately theme-independent. Classic WoW keeps the client
--- chrome on stock *windows*, but the tooltip is not one of them: it is the
--- surface that carries PandaUI's own item comparison -- the CURRENTLY_EQUIPPED
--- heading, the stat tint and the change summary -- and running that on the
--- stock tooltip left those features off in that theme entirely. Both themes
--- therefore draw the same flat tooltip. The Classic palette leaves
--- M.color.background/text/textDim at their shared values
--- (themes/classic-wow.lua), so nothing here needs a per-theme colour.
+-- This module keeps the same content treatment in every theme. Classic WoW
+-- and Modern WoW frame that surface with the shared ThinBorder rim; the flat
+-- Modern theme retains its borderless panel language.
 --
 -- behavior.json / tooltip.native_read/regions/hide/backdrop/statusbar/child.v1
 -- (all SUPPORTED, BEHAVIOR_VERIFIED) confirm the calls used here: GameTooltip
@@ -250,6 +245,74 @@ local function ClearAllEdges(frame, name)
   ClearNativeEdge(frame)
   ClearAddonEdges(frame)
   if name then ClearNativeTextures(name) end
+end
+
+-- The ThinBorder's line sits inside its art (3 texels of 32 on the left, top
+-- and right, 5 on the bottom), so a rim on the tooltip's edges left the flat
+-- fill of the tooltip and its price/note sections showing past the line
+-- (user report, 2026-11-02). The rim is pushed out by those insets instead of
+-- shrinking each fill, so the line lands on the fill's edge for any stack.
+local function RimOutset(border)
+  if type(U.ModernWowThinBorderInsets) ~= "function" then return 0, 0, 0, 0 end
+  return U.ModernWowThinBorderInsets(border.size)
+end
+
+local function PlaceRimCorner(piece, point, target, x, y)
+  if not piece then return end
+  pcall(piece.ClearAllPoints, piece)
+  pcall(piece.SetPoint, piece, point, target, point, x, y)
+end
+
+-- Bottom corners only; the bottom and side pieces are anchored between the
+-- corners and follow automatically.
+local function FitRimBottom(border, bottom)
+  if border.bottomTarget == bottom then return end
+  local left, _, right, low = RimOutset(border)
+  PlaceRimCorner(border.bottomLeft, "BOTTOMLEFT", bottom, -left, -low)
+  PlaceRimCorner(border.bottomRight, "BOTTOMRIGHT", bottom, right, -low)
+  border.bottomTarget = bottom
+end
+
+-- The shared builder is defined later in the TOC, but module enables happen
+-- after every Lua file has loaded. Build each tooltip rim once: its anchored
+-- pieces resize with the native tooltip, while the native edge suppression
+-- above still runs whenever the client restores its own chrome.
+local function UseThinBorder(frame)
+  if not frame or frame.puiTooltipThinBorder then return end
+  if U.GetActiveThemeStyle() ~= "classic-wow" and
+     U.GetActiveThemeStyle() ~= "modern-wow" then
+    return
+  end
+  if type(U.ModernWowBuildThinBorder) ~= "function" then return end
+  if U.ModernWowBuildThinBorder(frame) then
+    frame.puiTooltipThinBorder = true
+    local border = frame.puiModernWowThinBorder
+    if type(border) == "table" then
+      local left, top, right = RimOutset(border)
+      PlaceRimCorner(border.topLeft, "TOPLEFT", frame, -left, top)
+      PlaceRimCorner(border.topRight, "TOPRIGHT", frame, right, top)
+      border.bottomTarget = nil
+      FitRimBottom(border, frame)
+    end
+  end
+end
+
+-- Bag item tooltips can continue through the owned sell-price and favourite
+-- hint frames below GameTooltip. Move the existing rim's bottom corners to the
+-- lowest visible section; its bottom and side pieces are anchored between the
+-- corners and follow automatically. This keeps one outer rim with no seams.
+local function FitThinBorder(frame)
+  if not frame then return end
+  UseThinBorder(frame)
+
+  local border = frame.puiModernWowThinBorder
+  if type(border) ~= "table" then return end
+
+  local bottom = frame
+  if type(U.TooltipSectionBottom) == "function" then
+    bottom = U.TooltipSectionBottom(frame) or frame
+  end
+  FitRimBottom(border, bottom)
 end
 
 local function StyleStatusBar()
@@ -537,6 +600,8 @@ local function StyleFrame()
   -- tooltip (the other 60 regions are the Left/Right fontstrings); they carry
   -- the remaining stock corner and item-divider art.
   ClearAllEdges(tooltip, "GameTooltip")
+  UseThinBorder(tooltip)
+  FitThinBorder(tooltip)
 
   -- Tooltip text is populated into native FontStrings instead of passing
   -- through U.CreateLabel/U.SetStockFont. Bring every populated line onto the
@@ -572,6 +637,7 @@ function U.StyleCompareTooltip(tooltip, name)
     border = false,
   })
   ClearAllEdges(tooltip, name)
+  UseThinBorder(tooltip)
 
   local lineCount = 0
   local countOk, count = pcall(tooltip.NumLines, tooltip)
@@ -831,6 +897,81 @@ function U.ShowTooltipFitted(tooltip, name)
 
   pcall(tooltip.Show, tooltip)
   FitCompareTooltip(tooltip, name)
+end
+
+-- Spell descriptions can come back on one unwrapped row, because the line
+-- region keeps whatever width the previous tooltip left on it. The row then
+-- spans most of the screen and pushes the tooltip off its edge. A row wider
+-- than the wrap width is rewritten against that width, which wraps it
+-- (ui.fontstring_width_wraps_and_reports_height), then the frame is sized to
+-- the wrapped content and the right-hand column re-anchored to it.
+local TOOLTIP_WRAP_WIDTH = 320
+
+local function WrapTooltipRow(label, text, width)
+  pcall(label.SetWidth, label, width)
+  pcall(label.SetText, label, "")
+  pcall(label.SetText, label, text)
+end
+
+function U.WrapWideTooltipLines(tooltip, name)
+  if not tooltip or type(name) ~= "string" then return end
+
+  local countOk, lineCount = pcall(tooltip.NumLines, tooltip)
+  if not countOk or type(lineCount) ~= "number" or lineCount < 1 then return end
+
+  -- Rows with a right-hand value are never wrapped; they set the floor.
+  local wrapWidth = TOOLTIP_WRAP_WIDTH
+  local wide = {}
+  local lineIndex
+  for lineIndex = 1, lineCount do
+    local left = CompareDrawnWidth(U.G(name .. "TextLeft" .. lineIndex))
+    local right = CompareDrawnWidth(U.G(name .. "TextRight" .. lineIndex))
+    if right > 0 then
+      if left + COMPARE_TEXT_GAP + right > wrapWidth then
+        wrapWidth = left + COMPARE_TEXT_GAP + right
+      end
+    elseif left > TOOLTIP_WRAP_WIDTH then
+      table.insert(wide, lineIndex)
+    end
+  end
+
+  local wrapped = false
+  local i
+  for i = 1, table.getn(wide) do
+    local label = U.G(name .. "TextLeft" .. wide[i])
+    local text = U.TooltipRegionText(label)
+    if text and CompareDrawnWidth(label) > wrapWidth then
+      WrapTooltipRow(label, text, wrapWidth)
+      wrapped = true
+    end
+  end
+  if not wrapped then return end
+
+  pcall(tooltip.Show, tooltip)
+
+  -- GetStringWidth still reports a wrapped row's single-line width, so the
+  -- content width is capped at the wrap width rather than measured from it.
+  local content = 0
+  for lineIndex = 1, lineCount do
+    local row = CompareDrawnWidth(U.G(name .. "TextLeft" .. lineIndex))
+    local right = CompareDrawnWidth(U.G(name .. "TextRight" .. lineIndex))
+    if right > 0 then
+      row = row + COMPARE_TEXT_GAP + right
+    elseif row > wrapWidth then
+      row = wrapWidth
+    end
+    if row > content then content = row end
+  end
+  if content <= 0 then return end
+
+  pcall(tooltip.SetWidth, tooltip, content + COMPARE_TEXT_INSET * 2)
+  for lineIndex = 1, lineCount do
+    local right = U.G(name .. "TextRight" .. lineIndex)
+    if CompareDrawnWidth(right) > 0 then
+      local leftName = name .. "TextLeft" .. lineIndex
+      AnchorCompareRight(right, leftName, U.G(leftName), content)
+    end
+  end
 end
 
 -- Comparison tooltips are not owned by the bag module. The client can show
@@ -2126,6 +2267,11 @@ function placement.Tick()
   if U.PerfDisabled and U.PerfDisabled("tooltip") then return end
   local tooltip = U.G("GameTooltip")
 
+  -- The price and favourite sections are shown independently of the native
+  -- frame and can change while the same bag slot remains hovered. Follow the
+  -- current bottom every frame, alongside the already per-frame placement.
+  FitThinBorder(tooltip)
+
   -- Native population can restore its bevel/divider after the show and resize
   -- hooks have run. Suppress every native and legacy addon edge on the
   -- per-frame placement pass so no intermediate item or world-tooltip layout
@@ -2392,12 +2538,8 @@ end
 function TT.OnEnable()
   placement.Register()
   U.ApplyTooltipPosition()
-  -- No theme gate: see the note at the head of this file. The tooltip carries
-  -- PandaUI's item comparison, so it is the addon's own frame in Classic WoW
-  -- as well as Modern.
-  --
-  -- Style once up front so the very first tooltip is already flat rather than
-  -- relying on a trigger that has not fired yet.
+  -- Style once up front so the very first tooltip has its theme chrome rather
+  -- than relying on a trigger that has not fired yet.
   StyleFrame()
 
   if not InstallTriggers() then
@@ -2412,6 +2554,12 @@ function TT.OnEnable()
   if not compareInstalled then
     U.Debug("tooltip: no comparison hooks installed, styling is poll-driven only")
   end
+
+  -- Spellbook buttons fill GameTooltip in SpellButton_OnEnter (also rerun by
+  -- its OnUpdate refresh); wrap an over-wide description after each fill.
+  U.PostHookGlobal("SpellButton_OnEnter", function()
+    U.WrapWideTooltipLines(GameTooltip, "GameTooltip")
+  end)
 
   U.RegisterUpdate("tooltip.player-style", 0.10, function()
     RefreshTooltip(false)

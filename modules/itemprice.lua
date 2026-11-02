@@ -301,112 +301,29 @@ local function Remember(tip, link, count)
   rec.count = tonumber(count) or 1
 end
 
--- Classic WoW keeps the client's own tooltip chrome. SetTooltipMoney was the
--- obvious native route, and its call completed without error, but the user
--- confirmed that it rendered no price on this client. Give the native tooltip
--- explicit extra height instead and place an owned row in that new bottom
--- space. This does not depend on GameTooltip's broken AddLine relayout path.
-local classicPrice = {
-  -- 14px row + 5px bottom padding + 5px existing breathing room + the
-  -- requested 4px separation from the native tooltip contents above it.
-  extraHeight = 28,
-  inset = 10,
-  gap = 8,
-}
-
-function classicPrice.Build(tip)
-  if classicPrice.row then return classicPrice.row end
-
-  local row = CreateFrame("Frame", nil, tip)
-  row:SetHeight(14)
-
-  row.label = U.CreateLabel(row, {
-    size = U.media.fontSize.small,
-    color = U.media.color.text,
-    inherits = "GameFontNormalSmall",
-  })
-  if row.label then row.label:SetPoint("LEFT", row, "LEFT", 0, 0) end
-
-  row.readout = U.CreateMoneyReadout(row)
-  row:Hide()
-  classicPrice.row = row
-  return row
-end
-
-function classicPrice.Hide()
-  if classicPrice.row then classicPrice.row:Hide() end
-  if classicPrice.tip then
-    if classicPrice.baseWidth then
-      pcall(classicPrice.tip.SetWidth, classicPrice.tip, classicPrice.baseWidth)
-    end
-    if classicPrice.baseHeight then
-      pcall(classicPrice.tip.SetHeight, classicPrice.tip, classicPrice.baseHeight)
-    end
+-- Focused PandaRuntimeProbe access to the live separate price panel. The
+-- references are read-only and avoid searching unnamed tooltip children.
+function U.ProbeItemPriceGeometry()
+  local panel = trace.panelFrame
+  local row = panel and panel.rows and panel.rows[1]
+  local readout = row and row.readout
+  local shown = false
+  if panel and panel.IsShown then
+    local ok, value = pcall(panel.IsShown, panel)
+    if ok and value then shown = true end
   end
-  classicPrice.tip = nil
-  classicPrice.baseWidth = nil
-  classicPrice.baseHeight = nil
-  classicPrice.targetHeight = nil
-  classicPrice.active = nil
-end
-
-function classicPrice.Show(tip, copper, label)
-  if not U.ThemeStyleUsesNativeChrome() then return false end
-  if not tip or not tip.GetHeight or not tip.SetHeight then return false end
-
-  local heightOk, baseHeight = pcall(tip.GetHeight, tip)
-  local widthOk, baseWidth = pcall(tip.GetWidth, tip)
-  baseHeight = heightOk and tonumber(baseHeight) or nil
-  baseWidth = widthOk and tonumber(baseWidth) or nil
-  if not baseHeight or baseHeight <= 0 or not baseWidth or baseWidth <= 0 then
-    return false
-  end
-
-  local row = classicPrice.Build(tip)
-  if not row or not row.readout then return false end
-
-  if row.label then row.label:SetText(label or "") end
-  row.readout:SetAmount(copper)
-
-  local labelWidth = 0
-  if row.label and row.label.GetStringWidth then
-    local labelOk, value = pcall(row.label.GetStringWidth, row.label)
-    if labelOk then labelWidth = math.ceil(tonumber(value) or 0) end
-  end
-  local contentWidth = labelWidth + classicPrice.gap +
-                       (row.readout.contentWidth or 0)
-  local targetWidth = math.max(baseWidth,
-                               contentWidth + classicPrice.inset * 2)
-  local targetHeight = baseHeight + classicPrice.extraHeight
-
-  classicPrice.tip = tip
-  classicPrice.baseWidth = baseWidth
-  classicPrice.baseHeight = baseHeight
-
-  row:SetWidth(contentWidth)
-  row.readout:ClearAllPoints()
-  row.readout:SetPoint("LEFT", row, "LEFT", labelWidth + classicPrice.gap, 0)
-  row:ClearAllPoints()
-  row:SetPoint("BOTTOMLEFT", tip, "BOTTOMLEFT", classicPrice.inset, 5)
-
-  local widthSet = pcall(tip.SetWidth, tip, targetWidth)
-  local heightSet = pcall(tip.SetHeight, tip, targetHeight)
-  if not widthSet or not heightSet then
-    classicPrice.Hide()
-    return false
-  end
-
-  local appliedOk, appliedHeight = pcall(tip.GetHeight, tip)
-  if not appliedOk or math.abs((tonumber(appliedHeight) or 0) - targetHeight) > 1 then
-    classicPrice.Hide()
-    return false
-  end
-
-  classicPrice.active = true
-  classicPrice.targetHeight = targetHeight
-  row:Show()
-  pcall(tip.Show, tip)
-  return true
+  return {
+    active = shown,
+    mode = "separate-panel",
+    tip = U.G("GameTooltip"),
+    panel = panel,
+    row = row,
+    label = row and row.label,
+    readout = readout,
+    gold = readout and readout.gold,
+    silver = readout and readout.silver,
+    copper = readout and readout.copper,
+  }
 end
 
 local function Append(tip)
@@ -414,7 +331,6 @@ local function Append(tip)
   -- before resolving this hover so an unknown or suppressed item cannot leave
   -- the last item's panel visible.
   U.HideMoneyRows()
-  classicPrice.Hide()
 
   local rec = tracked[tip]
   if not rec or not rec.id then
@@ -446,18 +362,11 @@ local function Append(tip)
   local stackSell = sell * count
   local rows = { { label = U.L("COMMON_SELL"), copper = stackSell } }
 
-  if classicPrice.Show(tip, stackSell, rows[1].label) then
-    trace.panelFrame = nil
-    trace.result = "classic in-tooltip price shown"
-    trace.sell = stackSell
-    trace.panel = "classic inline"
-    return
-  end
-
-  -- Flat themes retain the separate owned frame because GameTooltip will not
-  -- relayout, but matching its width and sharing the edge makes it one visual
-  -- surface. This is also the safe fallback if the Classic native money helper
-  -- is missing or errors.
+  -- Every theme uses the separate owned frame because GameTooltip will not
+  -- retain an explicit larger height. itempricegeometry.v1 measured Classic's
+  -- requested 62.48 height restored to 34.48 for all eight samples, leaving
+  -- an inline row over the item name. Sharing the tooltip edge preserves one
+  -- visual surface without depending on native relayout.
   -- The match is asked for rather than measured here: a width read during this
   -- hover is still the previous tooltip's, which is what made the price cell
   -- render far wider than the tooltip above it. U.ShowMoneyRows carries the
@@ -666,10 +575,8 @@ end
 -- bags.favorite_hint_tooltip_cycle).
 --
 -- core/itemslot.lua post-hooks each slot's OnUpdate into this, which runs after
--- the stock re-population. The flat panel hangs off GameTooltip and follows it,
--- so it only has to be left alone. The Classic row lives inside the tooltip's
--- own height, which every re-population lays out again, so that height is put
--- back whenever it is lost.
+-- the stock re-population. The separate price panel hangs off GameTooltip and
+-- follows it, so it only has to be left alone while ownership remains valid.
 function U.RefreshItemPrice(button)
   if not button or slotHover.button ~= button then return end
 
@@ -680,28 +587,12 @@ function U.RefreshItemPrice(button)
   local shownOk, shown = pcall(tooltip.IsShown, tooltip)
   if not ownedOk or not owned or not shownOk or not shown then
     U.HideItemPrice()
-    return
   end
-
-  if not classicPrice.active or not classicPrice.targetHeight then return end
-
-  local heightOk, height = pcall(tooltip.GetHeight, tooltip)
-  if not heightOk or
-     math.abs((tonumber(height) or 0) - classicPrice.targetHeight) <= 1 then
-    return
-  end
-
-  -- The re-population already restored the native height; the stale base
-  -- must not be written back over it before it is measured again.
-  classicPrice.baseWidth = nil
-  classicPrice.baseHeight = nil
-  U.ShowItemPrice(slotHover.bag, slotHover.slot, button)
 end
 
 function U.HideItemPrice()
   slotHover.button = nil
   U.HideMoneyRows()
-  classicPrice.Hide()
 end
 
 -- ---------------------------------------------------------------------------

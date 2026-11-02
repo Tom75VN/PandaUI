@@ -451,6 +451,25 @@ function tal.BuildPanelBorder(panel, sizeOverride, bottomRightPath)
     right:SetPoint("TOPRIGHT", topRight, "BOTTOMRIGHT", 0, 0)
     right:SetPoint("BOTTOMRIGHT", bottomRight, "TOPRIGHT", 0, 0)
   end
+
+  -- Keep the authored pieces addressable by shared surfaces whose visible
+  -- body spans more than one frame. GameTooltip's addon-owned price and note
+  -- sections are separate frames because this client restores the tooltip's
+  -- native height; its one outer rim therefore moves only these bottom pieces
+  -- to the last visible section. Existing callers still ignore this table.
+  panel.puiModernWowThinBorder = {
+    topLeft = topLeft,
+    topRight = topRight,
+    bottomLeft = bottomLeft,
+    bottomRight = bottomRight,
+    top = top,
+    bottom = bottom,
+    left = left,
+    right = right,
+    size = size,
+    bottomTarget = panel,
+  }
+  return panel.puiModernWowThinBorder
 end
 
 function tal.BuildPanel(host, index)

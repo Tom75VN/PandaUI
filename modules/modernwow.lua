@@ -1152,8 +1152,8 @@ mw.units = {
   { id = "targettarget", art = "targetFrame", bg = "playerFrameBg",
     power = "totPowerFill", mirror = true,
     -- The single health bar is trimmed 3 units off its bottom edge, and its
-    -- centred name kept on the bar's centre, to sit inside this compact housing.
-    healthTrim = 3, nameY = 0 },
+    -- 8px name sits 1.5 units above the bar's centre in this compact housing.
+    healthTrim = 3, nameSize = M.fontSize.small - 2, nameY = 1.5 },
   -- Target art, not the imported partyFrame: that one is a 128x64 canvas with
   -- its own proportions, and M.modernWow.sourceLayout describes the 256x128
   -- one. Giving the pet its own layout is a separate job; borrowing the target
@@ -2099,9 +2099,13 @@ function mw.BuildHousing(frame, entry)
   if entry.healthLabelSize then
     mw.SetHealthLabelSize(frame, entry.healthLabelSize)
   end
-  -- Centred single-label bars (target-of-target) take their own vertical nudge.
+  -- Centred single-label bars (target-of-target) take their own exact size and
+  -- vertical nudge. The exact-size pass is required for the original font.
   if entry.nameY and frame.health and frame.health.label and
      frame.health.textLayer then
+    if entry.nameSize then
+      U.SetFont(frame.health.label, entry.nameSize, nil, "unitframe", nil, true)
+    end
     frame.health.label:ClearAllPoints()
     frame.health.label:SetPoint("CENTER", frame.health.textLayer, "CENTER", 0,
                                 tonumber(entry.nameY) or 0)

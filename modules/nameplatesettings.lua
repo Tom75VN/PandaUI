@@ -48,6 +48,12 @@ nps.ITEMS = {
     { value = "TOP",   key = "NP_POS_TOP" },
     { value = "RIGHT", key = "NP_POS_RIGHT" },
   },
+  auraPosition = {
+    { value = "TOPLEFT",     key = "NP_POS_TOP_LEFT" },
+    { value = "TOPRIGHT",    key = "NP_POS_TOP_RIGHT" },
+    { value = "BOTTOMLEFT",  key = "NP_POS_BOTTOM_LEFT" },
+    { value = "BOTTOMRIGHT", key = "NP_POS_BOTTOM_RIGHT" },
+  },
 }
 
 -- Page specs. type: header | check | slider | dropdown | color | note.
@@ -70,6 +76,9 @@ nps.PAGES = {
     { type = "check", key = "showAuras", text = "SETTINGS_NAMEPLATE_AURAS" },
     { type = "check", key = "allPlateAuras", text = "NP_ALL_PLATE_AURAS",
       nampower = true },
+    { type = "dropdown", key = "auraPosition", text = "NP_AURA_POSITION" },
+    { type = "slider", key = "auraGap", text = "NP_AURA_GAP",
+      min = 0, max = 60, step = 1, col = 2 },
     { type = "check", key = "attachTargetCast",
       text = "SETTINGS_NAMEPLATE_CASTBAR" },
     { type = "check", key = "allPlateCasts", text = "NP_ALL_PLATE_CASTS",
@@ -359,7 +368,7 @@ function nps.BuildPage(parent, page)
         local control, refresh = U.CreateOptionalStatusSection(parent, {
           header = U.L("NAMPOWER_HEADER"),
           name = U.L("NAMPOWER_NAME"),
-          note = U.L("NAMPOWER_HINT"),
+          note = U.L("NAMPOWER_HINT_NAMEPLATES"),
           detectedText = U.L("NAMPOWER_DETECTED"),
           missingText = U.L("NAMPOWER_NOT_DETECTED"),
           detected = U.NampowerDetected,

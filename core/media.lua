@@ -1081,6 +1081,40 @@ M.corpseArrow = {
   mapAspect = 1.5,
 }
 
+-- Retail 12.1 action-button spell FX, baked by tools/make_action_fx_flipbooks.py
+-- and drawn by modules/actionbarpress.lua under every theme (user request).
+-- A cell is 64 Retail units on a 45-unit button. Timings are Retail's
+-- ActionButtonComponentTemplate.xml values except `press*`, which are
+-- pandaUI's Modern press style, set by eye.
+M.actionFx = {
+  cast   = M.modernWow.path .. "actionbar\\fx-cast",
+  burst  = M.modernWow.path .. "actionbar\\fx-burst",
+  static = M.modernWow.path .. "actionbar\\fx-static",
+  cellUnits = 64,
+  buttonUnits = 45,
+  columns = 8,        -- fx-cast / fx-burst: 8x8 cells
+  staticColumns = 4,  -- fx-static: 4x4 cells
+  steps = 32,         -- frames per flipbook row block
+  channelOffset = 32, -- channel fill / interrupt sweep start cell
+  staticCast = 0, staticChannel = 1, staticInterrupt = 2,
+  burstDuration = 0.5,
+  glowFade = 0.25,
+  castEndDelay = 0.5,
+  interruptSweep = 0.5,
+  interruptHold = 1,
+  interruptFade = 0.25,
+  pfuiDuration = 1 / 1.5,     -- pfUI zoomfade: alpha/scale 1.5 per second
+  pressDuration = 0.3,        -- Modern punch
+  pressDip = 0.12,            -- icon shrinks to 88%
+  pressRingDuration = 0.35,   -- Modern ring, faster than the cast burst
+  -- Ring tint per theme; Modern WoW keeps Retail's own gold.
+  ringColor = {
+    ["modern"] = { 0.96, 0.68, 0.04 },
+    ["classic-wow"] = { 1, 0.92, 0.7 },
+    ["modern-wow"] = { 1, 1, 1 },
+  },
+}
+
 -- Bottom window tabs from ui/frame-tabs.tga (64x256). Cells are measured off
 -- the atlas's own alpha: `u1, u2, v1, v2` plus the cell's texel size. Each
 -- middle is a flat horizontal run, so it stretches across a tab of any width;

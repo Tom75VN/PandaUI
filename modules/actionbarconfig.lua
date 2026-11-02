@@ -882,7 +882,16 @@ local GLOBALS = {
   { key = "showCount",    textKey = "ABC_SHOW_COUNT" },
   { key = "showCooldown", textKey = "ABC_SHOW_COOLDOWN" },
   { key = "showGCD",      textKey = "ABC_SHOW_GCD" },
+  { key = "pressAnimation", textKey = "ABC_PRESS_ANIMATION" },
+  { key = "castAnimation", textKey = "ABC_CAST_ANIMATION" },
 }
+
+-- Press animation style (modules/actionbarpress.lua), a string global.
+local PRESS_STYLES = {
+  { value = "modern", textKey = "ABC_PRESS_STYLE_MODERN" },
+  { value = "pfui",   textKey = "ABC_PRESS_STYLE_PFUI" },
+}
+local PRESS_STYLE_ROW = 52
 
 local function BuildGeneralPage(parent)
   local widgets = {}
@@ -913,6 +922,41 @@ local function BuildGeneralPage(parent)
     table.insert(widgets, check)
   end
 
+  local styleY = -34 - table.getn(GLOBALS) * 26 - 4
+  local styleLabel = U.CreateSettingsLabel(parent, {
+    size = M.fontSize.small,
+    color = M.color.accent,
+    inherits = "GameFontNormalSmall",
+    width = 240,
+    height = 14,
+    justify = "LEFT",
+  })
+  if styleLabel then
+    styleLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, styleY)
+    styleLabel:SetText(U.L("ABC_PRESS_STYLE"))
+    table.insert(widgets, styleLabel)
+  end
+
+  local styleItems = {}
+  for i = 1, table.getn(PRESS_STYLES) do
+    table.insert(styleItems, {
+      value = PRESS_STYLES[i].value,
+      text = U.L(PRESS_STYLES[i].textKey),
+    })
+  end
+  local style = U.CreateDropdown(parent, {
+    name = "PandaUIActionBarConfigPressStyle",
+    width = 240,
+    height = 24,
+    rowHeight = 20,
+    value = U.GetActionBarGlobal("pressStyle"),
+    items = styleItems,
+    onChange = function(value) U.SetActionBarGlobal("pressStyle", value) end,
+  })
+  style.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, styleY - 18)
+  controls.pressStyle = style
+  table.insert(widgets, style)
+
   local hint = U.CreateSettingsLabel(parent, {
     size = M.fontSize.small,
     color = M.color.textDim,
@@ -921,14 +965,14 @@ local function BuildGeneralPage(parent)
     width = PAGE_WIDTH,
   })
   if hint then
-    U.AnchorSettingsDescription(hint, controls[GLOBALS[table.getn(GLOBALS)].key].box)
+    U.AnchorSettingsDescription(hint, style.button)
     hint:SetText(U.L("ABC_GENERAL_HINT", U.ActionBarCount()))
     table.insert(widgets, hint)
   end
 
   -- Quick binding (modules/quickbind.lua) is a mode rather than a setting, so
   -- this is a launcher: the window closes and the mode takes the screen.
-  local bindY = -34 - table.getn(GLOBALS) * 26 - 34
+  local bindY = -34 - table.getn(GLOBALS) * 26 - 34 - PRESS_STYLE_ROW
 
   local quickbind = U.CreateButton(parent, {
     name = "PandaUIActionBarConfigQuickBind",
@@ -964,6 +1008,7 @@ local function BuildGeneralPage(parent)
       local key = GLOBALS[j].key
       if controls[key] then controls[key].SetValue(U.GetActionBarGlobal(key)) end
     end
+    controls.pressStyle.SetValue(U.GetActionBarGlobal("pressStyle"))
   end
 
   return widgets, Refresh

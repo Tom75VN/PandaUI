@@ -4,6 +4,29 @@ Player-visible PandaUI changes, newest first. Keep every bullet short, clear and
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-11-03
+
+### Added
+
+- Nameplate aura icons can use any plate corner with an adjustable gap.
+- Action buttons now have two press effects: Punch and glow, or Zoom and fade (Action Bars > General).
+- Action buttons show Retail-style casting sweeps, cast-complete bursts and interrupt effects (toggle in Action Bars > General).
+- Bag and bank items on cooldown show a white countdown timer.
+
+### Changed
+
+- Classic WoW and Modern WoW tooltips now use ThinBorder frames.
+- With Nampower, nameplates use exact server health and target frames use exact server health/power.
+- Modern WoW target-of-target names use 8-point text aligned higher in their health bar.
+
+### Fixed
+
+- Long spell tooltips in the spellbook wrap instead of running off the screen.
+- Classic and Modern WoW tooltip borders now enclose bag item details and no longer show background outside the border.
+- Nameplates stay below the minimap.
+- Classic WoW sell prices no longer overlap item tooltip text.
+- Buyback items show their tooltip on hover and can be bought back again.
+
 ## [0.13.2] - 2026-10-30
 
 ### Added

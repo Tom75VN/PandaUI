@@ -1241,10 +1241,159 @@ end
 -- ---------------------------------------------------------------------------
 -- Update
 -- ---------------------------------------------------------------------------
+-- Cooldown countdown
+--
+-- The native swipe ContainerFrame_UpdateCooldown drives draws nothing on this
+-- client (modules/actionbar.lua says the same of its own buttons), so a bag
+-- slot showed no cooldown at all. It now carries the action-bar readout: the
+-- same centred number and U.FormatTimeShort string, in plain white,
+-- re-evaluated from the client's (start, duration) pair on every tick.
+-- GetContainerItemCooldown is the call the stock function itself makes.
+-- Bags and the bank share this component, so both get it.
+local CD_TICK = 0.1
+-- Same cut as the action bars: a sub-2s pair is the global cooldown.
+local CD_MIN_DURATION = 2
+local cdButtons = {}   -- button -> true while a countdown may be running
+local cdTimerRunning = false
+
+local function SizeCooldownText(button, label)
+  local ok, width = pcall(button.GetWidth, button)
+  width = (ok and tonumber(width)) or M.slot.size
+  if width <= 0 or button.puiCdTextWidth == width then return end
+  button.puiCdTextWidth = width
+  -- Half the button, as on the action bars.
+  local size = math.floor(width * 0.5)
+  if size < 10 then size = 10 end
+  if size > 18 then size = 18 end
+  U.SetFont(label, size)
+end
+
+-- Built on first use: most slots never hold an item with a cooldown.
+local function EnsureCooldownText(button)
+  local existing = button.puiCooldownText
+  if existing ~= nil then return existing or nil end
+
+  -- A raised layer, so the number sits above the icon, the rarity edges and
+  -- the count layer rather than under them.
+  local layer = CreateFrame("Frame", nil, button)
+  pcall(layer.SetAllPoints, layer, button)
+  pcall(layer.EnableMouse, layer, false)
+  local levelOk, level = pcall(button.GetFrameLevel, button)
+  if levelOk and tonumber(level) then
+    pcall(layer.SetFrameLevel, layer, level + 12)
+  end
+
+  local label = U.CreateLabel(layer, {
+    size = M.fontSize.normal, color = M.cooldownText.normal,
+    inherits = "GameFontNormal",
+  })
+  if not label then
+    button.puiCooldownText = false
+    return nil
+  end
+  label:ClearAllPoints()
+  label:SetPoint("CENTER", layer, "CENTER", 0, 0)
+  label:Hide()
+  button.puiCooldownText = label
+  return label
+end
+
+local function HideCooldownText(button)
+  local label = button.puiCooldownText
+  if label and button.puiCdShown then
+    button.puiCdShown = false
+    button.puiCdColor = nil
+    pcall(label.SetText, label, "")
+    pcall(label.Hide, label)
+  end
+end
+
+-- Redraws one slot's number from its cached pair. Returns true while the
+-- countdown is still running.
+local function RefreshCooldownText(button)
+  if not button.puiCdActive then
+    HideCooldownText(button)
+    return false
+  end
+
+  local remaining = U.CooldownRemaining(button.puiCdStart, button.puiCdDuration)
+  if not remaining or remaining <= 0 then
+    button.puiCdActive = false
+    HideCooldownText(button)
+    return false
+  end
+
+  -- A closed window keeps its slots counting, but draws nothing.
+  local visible = button.IsVisible and button:IsVisible()
+  if not visible then return true end
+
+  local label = EnsureCooldownText(button)
+  if not label then return false end
+  SizeCooldownText(button, label)
+
+  -- Always white (user request, 2026-11-02): the bag readout does not take
+  -- the action bars' per-tier colours.
+  local text = U.FormatTimeShort(remaining)
+  local color = M.cooldownText.normal
+  pcall(label.SetText, label, text)
+  if button.puiCdColor ~= color then
+    button.puiCdColor = color
+    pcall(label.SetTextColor, label, color[1], color[2], color[3], color[4])
+  end
+  if not button.puiCdShown then
+    button.puiCdShown = true
+    pcall(label.Show, label)
+  end
+  return true
+end
+
+local function RefreshCooldownTexts()
+  local any = false
+  local button
+  for button in pairs(cdButtons) do
+    if RefreshCooldownText(button) then
+      any = true
+    else
+      cdButtons[button] = nil
+    end
+  end
+  if not any then
+    cdTimerRunning = false
+    U.UnregisterUpdate("itemslot.cooldown")
+  end
+end
+
+local function ReadSlotCooldown(bag, button)
+  local fn = U.G("GetContainerItemCooldown")
+  local slotOk, slot = pcall(button.GetID, button)
+  if type(fn) ~= "function" or not slotOk or not tonumber(slot) then
+    button.puiCdActive = false
+    return
+  end
+  local ok, start, duration, enable = pcall(fn, bag, slot)
+  start = (ok and tonumber(start)) or 0
+  duration = (ok and tonumber(duration)) or 0
+  enable = ok and tonumber(enable)
+  button.puiCdStart = start
+  button.puiCdDuration = duration
+  -- enable == 0 is Vanilla's "has a cooldown but must not show it" flag.
+  button.puiCdActive = start > 0 and duration >= CD_MIN_DURATION and
+                       enable ~= 0
+end
+
 function U.UpdateItemSlotCooldown(bag, button)
   if not button then return end
   local fn = U.G("ContainerFrame_UpdateCooldown")
   if type(fn) == "function" then pcall(fn, bag, button) end
+
+  ReadSlotCooldown(bag, button)
+  if RefreshCooldownText(button) then
+    cdButtons[button] = true
+    if not cdTimerRunning then
+      cdTimerRunning = true
+      U.RegisterUpdate("itemslot.cooldown", CD_TICK, RefreshCooldownTexts)
+    end
+  end
 end
 
 function U.UpdateItemSlot(button, bag, slot, link)

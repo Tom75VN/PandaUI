@@ -5,11 +5,11 @@
 --
 -- knowledge.json / unitframes.nongroup_health_is_percent (BEHAVIOR_VERIFIED):
 -- UnitHealth/UnitHealthMax return a 0-100 percentage with the maximum pinned
--- at 100 for every unit the player is not grouped with. There is no client API
--- that hands out a hostile creature's real hit points, so the numbers have to
--- come from somewhere else. Database/unit_vitals.lua carries the realm's own
--- creature table, and this file turns it into the two values a unit frame
--- wants: an exact maximum, and the best available current value.
+-- at 100 for every unit the player is not grouped with. There is no stock API
+-- that hands out a hostile creature's real hit points. Nampower callers use
+-- its live fields first; this module is the fallback. Database/unit_vitals.lua
+-- carries the realm's own creature table and turns it into an exact maximum
+-- plus the best available current value.
 --
 -- Maximum health and mana are exact. VMaNGOS computes them itself from the
 -- same three inputs the table stores:
@@ -26,11 +26,10 @@
 -- The percentage always wins a disagreement, so a missed event cannot make the
 -- readout drift away from what the bar shows.
 --
--- Creature identity: the table is keyed by creature id and this client exposes
--- no unit GUID or creature id at all (query_compat.py has no record for
--- UnitGUID, and none of the documented Unit functions returns an entry). The
--- key that is available is the unit's name and level, and that turns out to be
--- enough: joined against the bundled creature-name table, the 10,364 supported
+-- Creature identity: the table is keyed by creature id and the stock client
+-- exposes neither GUID nor creature id. This fallback uses name and level,
+-- which turns out to be enough: joined against the bundled creature-name
+-- table, the 10,364 supported
 -- templates produce 15,284 distinct (name, level) keys and *zero* of them
 -- carry two different maximum-health values. Any candidate id whose level
 -- range covers the unit therefore answers for every id sharing its name.

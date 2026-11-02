@@ -85,7 +85,9 @@ local defaults = {
   healthTextSize = 11,
   verticalOffset = 0,
   showHealthText = true,
-  showAuras      = true,   -- target debuffs above the target's plate
+  showAuras      = true,   -- target debuffs at the configured plate corner
+  auraPosition   = "TOPLEFT", -- TOPLEFT | TOPRIGHT | BOTTOMLEFT | BOTTOMRIGHT
+  auraGap        = 20,     -- health-bar edge to the nearest aura-icon edge
   attachTargetCast = true, -- target cast under the target's plate
   allPlateAuras  = true,   -- Nampower: debuffs on every plate
   allPlateCasts  = true,   -- Nampower: casts under every plate
@@ -1057,8 +1059,8 @@ function style.Number(value)
   return tostring(value)
 end
 
--- current/total are real hitpoints when core/unitvitals.lua knows them, nil
--- for players and unknown creatures; fraction (0..1) always exists. The
+-- current/total are real hitpoints from Nampower or the bundled fallback, nil
+-- when neither source knows them; fraction (0..1) always exists. The
 -- percent is rounded up like the unit frames' (U.CeilPercent): rounding to
 -- nearest printed 0% on a target whose frame still read 1%.
 function style.HealthText(current, total, fraction)
@@ -1704,8 +1706,8 @@ local function BuildOverlay(frame, parts)
   castIcon:Hide()
   overlay.castIcon = castIcon
 
-  -- Target debuffs above the name row. The offset is the row's top edge over
-  -- the bar; modules/auras.lua subtracts the icon size.
+  -- Target debuffs at the configured bar corner. The legacy offset is kept as
+  -- a fallback for callers without the nameplate gap setting.
   if type(U.CreateNameplateAuraRows) == "function" then
     local auraArt = modernWow and M.modernWow.nameplateAura or nil
     local auraOffset
@@ -1962,18 +1964,24 @@ end
 -- Refresh
 -- ---------------------------------------------------------------------------
 
--- Health for one plate. The native bar is the only source that works for a mob
--- that is neither targeted nor moused over, and on this client it may report a
--- 0..100 scale rather than real hitpoints -- which is exactly why the readout
--- is a percentage.
+-- Health for one plate. Nampower exposes live server-fed values for a loaded
+-- plate GUID. Without it, the native bar remains the universal fallback.
 local function ReadHealth(overlay)
+  if overlay.guid and type(U.NampowerUnitField) == "function" then
+    local value = U.NampowerUnitField(overlay.guid, "health")
+    local maximum = U.NampowerUnitField(overlay.guid, "maxHealth")
+    if value and maximum and maximum > 0 then
+      return value, 0, maximum, true
+    end
+  end
+
   local bar = overlay.parts.healthbar
   if bar then
     local value = tonumber(Call(bar, "GetValue"))
     local minimum, maximum = Call(bar, "GetMinMaxValues")
     minimum, maximum = tonumber(minimum), tonumber(maximum)
     if value and maximum and maximum > 0 then
-      return value, (minimum or 0), maximum
+      return value, (minimum or 0), maximum, false
     end
   end
 
@@ -1981,7 +1989,7 @@ local function ReadHealth(overlay)
   if overlay.isTarget then
     local hp = ApiNumber("UnitHealth", "target")
     local hpMax = ApiNumber("UnitHealthMax", "target")
-    if hp and hpMax and hpMax > 0 then return hp, 0, hpMax end
+    if hp and hpMax and hpMax > 0 then return hp, 0, hpMax, false end
   end
 
   return nil
@@ -2031,18 +2039,21 @@ local function ApplyModernWowFill(overlay, fraction)
     cell[2] / art.sheet[2], cell[4] / art.sheet[2])
 end
 
--- Health text for one plate: real hitpoints from core/unitvitals.lua when the
--- bundled creature table knows the name and level (the native bar reports a
--- non-group unit as a percentage), else nil, which style.HealthText turns
--- into the percentage. A skull level ("??") has no number and gets nil.
+-- Health text for one plate: Nampower's live values first, then the bundled
+-- creature fallback when it knows the name and level. Otherwise nil makes
+-- style.HealthText use the native percentage.
 local function PlateHealthText(overlay, name, levelText, value, minimum,
-                               maximum)
+                               maximum, exact)
   local current, total
-  local level = tonumber(levelText)
-  if name and level and type(U.UnitVitalsHealth) == "function" then
-    current, total = U.UnitVitalsHealth(
-      overlay.isTarget and "target" or "nameplate",
-      name, level, value - minimum, maximum - minimum)
+  if exact then
+    current, total = value - minimum, maximum - minimum
+  else
+    local level = tonumber(levelText)
+    if name and level and type(U.UnitVitalsHealth) == "function" then
+      current, total = U.UnitVitalsHealth(
+        overlay.isTarget and "target" or "nameplate",
+        name, level, value - minimum, maximum - minimum)
+    end
   end
   return style.HealthText(current, total,
                           (value - minimum) / (maximum - minimum))
@@ -2147,7 +2158,7 @@ local function RefreshPlate(overlay)
   -- Health is read first so Tank Mode can drop a corpse; then the reaction,
   -- the colours and the totem icon, which decide whether the health bar
   -- shows (style.HideHealth).
-  local value, minimum, maximum = ReadHealth(overlay)
+  local value, minimum, maximum, exactHealth = ReadHealth(overlay)
   local unitType = PlateUnitType(overlay, name)
   overlay.cache.unitType = unitType
   local tankKey = nil
@@ -2171,7 +2182,7 @@ local function RefreshPlate(overlay)
     if overlay.healthText then
       if cfg.showHealthText and maximum > minimum then
         overlay.healthText:SetText(PlateHealthText(
-          overlay, name, levelText, value, minimum, maximum))
+          overlay, name, levelText, value, minimum, maximum, exactHealth))
       else
         overlay.healthText:SetText("")
       end

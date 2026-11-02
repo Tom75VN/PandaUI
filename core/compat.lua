@@ -65,6 +65,35 @@ function U.UnitGuid(unit)
   return ValidGuid(guid)
 end
 
+-- Direct unit fields exposed by Nampower. These are the live values the
+-- server has sent for an object currently loaded by the client; callers keep
+-- their stock/database fallback for units Nampower cannot resolve.
+local getUnitField = U.hasNampower and U.G("GetUnitField") or nil
+if type(getUnitField) ~= "function" then getUnitField = nil end
+local unitPowerFields = { "power1", "power2", "power3", "power4", "power5" }
+local unitMaxPowerFields = {
+  "maxPower1", "maxPower2", "maxPower3", "maxPower4", "maxPower5"
+}
+
+function U.NampowerUnitField(unit, field)
+  if not getUnitField or type(unit) ~= "string" or
+     type(field) ~= "string" then
+    return nil
+  end
+  local ok, value = pcall(getUnitField, unit, field)
+  if not ok then return nil end
+  return tonumber(value)
+end
+
+function U.NampowerUnitPower(unit, powerType)
+  local index = tonumber(powerType)
+  if index == nil then return nil end
+  index = index + 1
+  if not unitPowerFields[index] then return nil end
+  return U.NampowerUnitField(unit, unitPowerFields[index]),
+         U.NampowerUnitField(unit, unitMaxPowerFields[index])
+end
+
 -- ---------------------------------------------------------------------------
 -- Numeric helpers
 -- ---------------------------------------------------------------------------

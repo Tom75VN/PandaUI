@@ -4,6 +4,22 @@ In-game tests still owed on OctoWoW. Tick an item once it passes. Report a
 failure with its number and what you saw (exact error text if any); every
 result is recorded in `knowledge.json` (`USER_CONFIRMED_INGAME`).
 
+## Action button press and Retail cast animations (coded 2026-11-01, not yet tested)
+
+Code: `modules/actionbarpress.lua`, `modules/actionbar.lua` (`OnButtonClick`),
+art `media/Textures/modern-wow/actionbar/fx-*.tga`. Knowledge records:
+`actionbars.press_zoomfade_animation`, `actionbars.retail_cast_fx`.
+Relaunch the client once (new textures).
+
+- [ ] PA1. Style Modern: an instant spell dips the icon and springs back, with a ring round the slot edge.
+- [ ] PA2. Style pfUI Zoom & Fade: icon copy grows to 2x and fades, as before.
+- [ ] PA3. Cast-time spell (e.g. Healing Wave): orange sweep fills the button for the cast, then a gold ring burst.
+- [ ] PA4. Channel (e.g. fishing): green sweep from the right, then a burst.
+- [ ] PA5. Move during a cast: red frame with a sweep down, fading after about 1 s.
+- [ ] PA6. Pushback (get hit while casting): the sweep slows to match the cast bar.
+- [ ] PA7. Each theme (Modern, Modern WoW, Classic WoW stock bar 1, bars 2-5): effects centred, ring colour right.
+- [ ] PA8. Both toggles and the style dropdown off/on take effect immediately; no Lua errors.
+
 ## Fullscreen world-map ping with zoom (broken 2026-10-29)
 
 Code: `modules/worldmapzoom.lua`, `modules/playerarrow.lua`. Knowledge records:

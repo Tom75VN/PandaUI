@@ -614,12 +614,19 @@ local function ReadHealth(frame)
   end
 
   -- Absolute hit points for a creature the client only reports as a
-  -- percentage. core/unitvitals.lua derives the maximum from the realm's own
-  -- creature table and refines the current value from UNIT_COMBAT amounts; it
-  -- answers nil for a player, a pet, or a creature that is not in the table,
-  -- and the readout stays the plain percentage in that case.
+  -- percentage. Nampower's target fields are the live server-fed source. The
+  -- bundled creature table remains the stock-client fallback.
   data.exactHealth, data.exactHealthMax = nil, nil
-  if data.healthIsPercent and data.connected ~= false and
+  if unit == "target" and data.connected ~= false and
+     type(U.NampowerUnitField) == "function" then
+    local current = U.NampowerUnitField(unit, "health")
+    local maximum = U.NampowerUnitField(unit, "maxHealth")
+    if current and maximum and maximum > 0 then
+      data.exactHealth, data.exactHealthMax = current, maximum
+    end
+  end
+  if not data.exactHealthMax and data.healthIsPercent and
+     data.connected ~= false and
      type(U.UnitVitalsHealth) == "function" then
     data.exactHealth, data.exactHealthMax =
       U.UnitVitalsHealth(unit, data.name, data.level,
@@ -639,11 +646,19 @@ local function ReadPower(frame)
   -- rather than leaving the frame half alive.
   if data.connected == false then data.power = 0 end
 
-  -- Mana on the same terms as health above. This runs its own lookup rather
-  -- than reading what ReadHealth left behind, because a "power" refresh
-  -- reaches ReadPower without ReadHealth having run.
+  -- Nampower exposes the five server power fields in UnitPowerType order.
+  -- The bundled mana table remains the fallback when no live field is usable.
   data.exactPower, data.exactPowerMax = nil, nil
-  if data.healthIsPercent and data.connected ~= false and
+  if unit == "target" and data.connected ~= false and
+     type(data.powerType) == "number" and
+     type(U.NampowerUnitPower) == "function" then
+    local current, maximum = U.NampowerUnitPower(unit, data.powerType)
+    if current and maximum and maximum > 0 then
+      data.exactPower, data.exactPowerMax = current, maximum
+    end
+  end
+  if not data.exactPowerMax and data.healthIsPercent and
+     data.connected ~= false and
      type(U.UnitVitalsPower) == "function" then
     data.exactPower, data.exactPowerMax =
       U.UnitVitalsPower(data.name, data.level, data.powerType,
@@ -805,8 +820,13 @@ local function StatusText(frame, token)
     -- data.healthPercent); power is stored as value and maximum, so the power
     -- share is worked out here rather than adding a second stored field.
     local pct
-    if token == "healthpct" then
+    if token == "healthpct" and data.exactHealthMax and
+       data.exactHealthMax > 0 then
+      pct = data.exactHealth / data.exactHealthMax
+    elseif token == "healthpct" then
       pct = data.healthPercent
+    elseif data.exactPowerMax and data.exactPowerMax > 0 then
+      pct = data.exactPower / data.exactPowerMax
     elseif type(data.powerMax) == "number" and data.powerMax > 0 then
       pct = data.power / data.powerMax
     end
@@ -849,25 +869,30 @@ local function StatusText(frame, token)
       return Hex(M.Unpack(M.color.textDim)) .. U.L("UF_OFFLINE")
     end
 
-    local hr, hg, hb = PastelText(Gradient(data.healthPercent))
+    local shownHealth = data.exactHealth or data.health
+    local shownHealthMax = data.exactHealthMax or data.healthMax
+    local shownPercent = data.healthPercent
+    if shownHealthMax and shownHealthMax > 0 then
+      shownPercent = shownHealth / shownHealthMax
+    end
+    local hr, hg, hb = PastelText(Gradient(shownPercent))
     if data.muted then hr, hg, hb = M.Unpack(M.color.textDim) end
     local prefix = Hex(hr, hg, hb)
 
     if data.isDead then return prefix .. (U.G("DEAD") or "Dead") end
-    if data.health ~= data.healthMax and data.healthMax > 0 then
+    if shownHealth ~= shownHealthMax and shownHealthMax > 0 then
       if data.healthIsPercent then
-        -- With the creature table behind it the frame can print the real
-        -- numbers instead: "1121 / 1536" says both how much is left and how
-        -- much there was, which the bar's own fill already shows as a
-        -- fraction. Without it there is only the percentage.
+        -- With an exact source behind it the frame can print the real numbers:
+        -- "1121 / 1536" says both how much is left and how much there was.
+        -- Without one there is only the percentage.
         if data.exactHealthMax then
           return prefix .. Abbreviate(data.exactHealth) .. " / " ..
                  Abbreviate(data.exactHealthMax)
         end
         return prefix .. U.CeilPercent(data.healthPercent) .. "%"
       end
-      return prefix .. Abbreviate(data.health) .. " - " ..
-             U.CeilPercent(data.healthPercent) .. "%"
+      return prefix .. Abbreviate(shownHealth) .. " - " ..
+             U.CeilPercent(shownPercent) .. "%"
     end
     -- Full health on a percent-scaled unit still reads as a percentage, so it
     -- keeps the "%" rather than printing a bare 100 -- unless the exact
@@ -876,7 +901,7 @@ local function StatusText(frame, token)
       if data.exactHealthMax then return prefix .. Abbreviate(data.exactHealthMax) end
       return prefix .. "100%"
     end
-    return prefix .. Abbreviate(data.health)
+    return prefix .. Abbreviate(shownHealth)
   end
 
   if token == "powerdyn" then
@@ -888,12 +913,10 @@ local function StatusText(frame, token)
     if data.muted then pr, pg, pb = M.Unpack(M.color.textDim) end
     local prefix = Hex(pr, pg, pb)
 
-    -- Absolute mana from the creature table, matching the health readout
-    -- above. Only mana gets this: VMaNGOS gives a non-caster rage on an
-    -- internal 1000 scale that displays as 100, or energy capped at 100, and
-    -- both already are the number the client hands over.
+    -- Absolute power from Nampower, or mana from the bundled fallback,
+    -- matching the health readout above.
     if data.exactPowerMax then
-      if data.power ~= data.powerMax then
+      if data.exactPower ~= data.exactPowerMax then
         return prefix .. Abbreviate(data.exactPower) .. " / " ..
                Abbreviate(data.exactPowerMax)
       end
@@ -6351,7 +6374,7 @@ local function BuildUnitFrameGeneralSettings(parent, y, width)
   local nampowerStatus, refreshNampower = U.CreateOptionalStatusSection(parent, {
     header = U.L("NAMPOWER_HEADER"),
     name = U.L("NAMPOWER_NAME"),
-    note = U.L("NAMPOWER_HINT"),
+    note = U.L("NAMPOWER_HINT_UNITFRAMES"),
     detectedText = U.L("NAMPOWER_DETECTED"),
     missingText = U.L("NAMPOWER_NOT_DETECTED"),
     detected = U.NampowerDetected,

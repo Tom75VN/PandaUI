@@ -109,13 +109,18 @@ A unified bag and bank window with sorting, search and one-click junk selling.
 - Low-health and loss-of-control screen warnings.
 - Profession recipe tracker on screen.
 
+## Roadmap
+
+- **Important:** fix the minimap moving after a relog or `/reload` for some players.
+- Browse the bags and bank of your other characters on this account.
+
 ## Get started
 
 Use `/pui` to open the settings, `/pui unlock` to arrange supported elements, `/pui bind` to enter Quick Binding mode, and `/pui help` for the full list.
 
 ## Version
 
-Current release: **0.13.2**
+Current release: **0.13.3**
 
 [See what changed](CHANGELOG.md).
 

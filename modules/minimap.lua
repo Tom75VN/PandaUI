@@ -1759,6 +1759,11 @@ end
 function MM:OnEnable()
   if self.button then return end
 
+  -- Nameplates use BACKGROUND/LOW strata, including the current target. Keep
+  -- the minimap in the HUD layer so a plate cannot draw over it.
+  local minimap = U.G("Minimap")
+  if minimap then pcall(minimap.SetFrameStrata, minimap, "MEDIUM") end
+
   if ModernFlat() then
     DressModernFlatMinimap()
   else
@@ -1768,7 +1773,7 @@ function MM:OnEnable()
 
   -- A child of Minimap, so it moves, scales and hides with the map. Its frame
   -- level sits above the map's own so its clicks are not taken as pings.
-  local minimap = U.G("Minimap")
+  minimap = U.G("Minimap")
   -- A plain Button rather than U.CreateButton: the round panda icon carries
   -- its own gold rim, so the square backdrop and border are left out.
   local button = CreateFrame("Button", "PandaUISettingsButton", minimap or UIParent)

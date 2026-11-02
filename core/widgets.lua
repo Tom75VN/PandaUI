@@ -2500,16 +2500,12 @@ local MONEY_COLUMN_GAP = 10
 -- instead of adding their own top padding after it. The overlap is how far a
 -- section reaches up: into the tooltip's bottom padding, or into the price
 -- panel's bottom inset. Leftover text gap is about one tooltip line gap.
--- Classic WoW's native tooltip chrome draws in that padding, so nothing
--- reaches into it there.
+-- modules/tooltip.lua draws the same flat tooltip under every theme, including
+-- Classic WoW, so attached sections use the same compact overlap everywhere.
 local SECTION_TOOLTIP_OVERLAP = 8
 local SECTION_PANEL_OVERLAP = 3
 
 local function SectionTooltipOverlap()
-  if type(U.ThemeStyleUsesNativeChrome) == "function" and
-     U.ThemeStyleUsesNativeChrome() then
-    return 0
-  end
   return SECTION_TOOLTIP_OVERLAP
 end
 
@@ -2842,6 +2838,26 @@ function U.TooltipNoteShown()
   if not notePanel then return false end
   local ok, shown = pcall(notePanel.IsShown, notePanel)
   return ok and shown and true or false
+end
+
+-- The lowest visible addon-owned section attached to one GameTooltip. The
+-- tooltip module uses this to extend the shared ThinBorder around the whole
+-- visual stack; these sections cannot live inside GameTooltip because OctoWoW
+-- restores that frame's native height after item population.
+function U.TooltipSectionBottom(matchFrame)
+  if not matchFrame then return nil end
+
+  if notePanel and notePanel.matchFrame == matchFrame then
+    local ok, shown = pcall(notePanel.IsShown, notePanel)
+    if ok and shown then return notePanel end
+  end
+
+  if moneyPanel and moneyPanel.matchFrame == matchFrame then
+    local ok, shown = pcall(moneyPanel.IsShown, moneyPanel)
+    if ok and shown then return moneyPanel end
+  end
+
+  return nil
 end
 
 -- ---------------------------------------------------------------------------

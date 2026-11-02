@@ -121,6 +121,15 @@ local GLOBAL_DEFAULTS = {
   showCount    = true,
   showCooldown = true,
   showGCD      = true,
+  -- Press feedback and Retail cast animations (modules/actionbarpress.lua).
+  pressAnimation = true,
+  pressStyle     = "modern",
+  castAnimation  = true,
+}
+
+-- String-valued globals and the values they accept.
+local GLOBAL_CHOICES = {
+  pressStyle = { modern = true, pfui = true },
 }
 
 -- Native binding names for the slot ranges the stock UI owns. Bar 6 and any
@@ -1690,7 +1699,12 @@ local function HookNativeBindingHighlights()
     ReleaseButtonPress(BoundButton(1, index))
   end)
   local multiHasUp = U.PostHookGlobal("MultiActionButtonUp", function(name, index)
-    ReleaseButtonPress(BoundButton(NATIVE_BINDING_BAR[name], index))
+    local button = BoundButton(NATIVE_BINDING_BAR[name], index)
+    -- Native bar 2-5 keys fire the action here, never through OnButtonClick.
+    if button and type(U.PlayActionPressAnimation) == "function" then
+      U.PlayActionPressAnimation(button, button.puiIcon)
+    end
+    ReleaseButtonPress(button)
   end)
   if mainHasUp or multiHasUp then installed = true end
 
@@ -1898,6 +1912,12 @@ OnButtonClick = function(button)
     return
   end
   local slot = ButtonSlot(button)
+
+  -- pfUI plays its press effect when the action fires (key release with
+  -- its default keydown = 0), not on key down.
+  if type(U.PlayActionPressAnimation) == "function" then
+    U.PlayActionPressAnimation(button, button.puiIcon)
+  end
 
   -- Every route into a press -- a click, a declared binding and the legacy
   -- ActionButtonUp path -- lands here, so this is the one place that knows a
@@ -3025,11 +3045,21 @@ end
 -- a change re-lays out all of them.
 function U.GetActionBarGlobal(name)
   if not cfg or GLOBAL_DEFAULTS[name] == nil then return nil end
+  local choices = GLOBAL_CHOICES[name]
+  if choices then
+    if choices[cfg[name]] then return cfg[name] end
+    return GLOBAL_DEFAULTS[name]
+  end
   return cfg[name] and true or false
 end
 
 function U.SetActionBarGlobal(name, value)
   if not cfg or GLOBAL_DEFAULTS[name] == nil then return nil end
+  local choices = GLOBAL_CHOICES[name]
+  if choices then
+    if choices[value] then cfg[name] = value end
+    return U.GetActionBarGlobal(name)
+  end
   cfg[name] = value and true or false
   -- Turning the readout off has to take whatever is on screen off with it: the
   -- shade is only redrawn by the sweep, and the sweep is about to stop running.
@@ -3514,7 +3544,12 @@ function AB:OnEnable()
   -- The legacy route replaces ActionButtonDown/Up with dispatch into PandaUI
   -- Bar 1. Classic keeps the stock bar, so replacing that route would turn its
   -- keyboard bindings into no-ops.
-  if not UsesNativeMainMenuBar() then InstallLegacyMainBindingRoute() end
+  if not UsesNativeMainMenuBar() then
+    InstallLegacyMainBindingRoute()
+  elseif type(U.InstallNativeActionPressAnimation) == "function" then
+    U.InstallNativeActionPressAnimation()
+  end
+  if type(U.InstallActionSpellFx) == "function" then U.InstallActionSpellFx() end
   -- Keep the visual-only hooks for the static multibars too. On the legacy
   -- main route they wrap PandaUI's replacement, never the hidden stock path.
   HookNativeBindingHighlights()
