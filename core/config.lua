@@ -233,14 +233,27 @@ end
 -- level so this stays a set/lookup store rather than an arbitrary object graph.
 local MAX_MODULE_TABLE_ENTRIES = 200
 
-local function SanitizeModuleTable(source)
+-- Modules whose settings hold records deeper than one table. The number is how
+-- many table levels below the module are kept: bagcustomcategories stores
+-- list -> category -> rules -> rule (4), which the one-level default emptied on
+-- every /reload.
+local MODULE_TABLE_DEPTH = { bagcustomcategories = 4 }
+
+local function SanitizeModuleTable(source, depth)
   local clean, count, key, value = {}, 0, nil, nil
   for key, value in pairs(source) do
     if count >= MAX_MODULE_TABLE_ENTRIES then break end
     local keyOk = type(key) == "number" or
                   (type(key) == "string" and IsSafeString(key))
-    if keyOk and SanitizeScalar(clean, key, value) then
-      count = count + 1
+    if keyOk then
+      if type(value) == "table" then
+        if depth > 1 then
+          clean[key] = SanitizeModuleTable(value, depth - 1)
+          count = count + 1
+        end
+      elseif SanitizeScalar(clean, key, value) then
+        count = count + 1
+      end
     end
   end
   return clean
@@ -256,7 +269,7 @@ local function SanitizeModules(modules)
       local entry, key, value = {}, nil, nil
       for key, value in pairs(settings) do
         if type(value) == "table" then
-          entry[key] = SanitizeModuleTable(value)
+          entry[key] = SanitizeModuleTable(value, MODULE_TABLE_DEPTH[name] or 1)
         else
           SanitizeScalar(entry, key, value)
         end

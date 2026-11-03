@@ -1033,15 +1033,39 @@ end
 -- dropped from the label pass, and a full refresh on enter/leave restores them.
 -- Exact size for the health and power bar readouts; 0 keeps the authored size.
 -- Applied lazily from ApplyBarLabels so it lands after any theme sizing pass.
-function UF.powerText.Size(kind)
-  local value = tonumber(UF.powerText.Config()[kind .. "TextSize"])
+--
+-- Each frame group (player, target, pet, party) owns its own size, stored as
+-- e.g. petHealthTextSize. Without one the group follows the global
+-- healthTextSize/powerTextSize, which is what the settings page writes and
+-- what older saves carry.
+UF.powerText.groups = { "player", "target", "pet", "party" }
+
+function UF.powerText.Group(frame)
+  local id = frame and frame.spec and frame.spec.id
+  if not id then return nil end
+  if id == "player" or id == "target" or id == "pet" then return id end
+  if string.find(id, "^party") then return "party" end
+  return nil
+end
+
+function UF.powerText.SizeKey(kind, group)
+  if not group then return kind .. "TextSize" end
+  return group .. string.upper(string.sub(kind, 1, 1)) ..
+         string.sub(kind, 2) .. "TextSize"
+end
+
+function UF.powerText.Size(kind, group)
+  local cfg = UF.powerText.Config()
+  local value
+  if group then value = tonumber(cfg[UF.powerText.SizeKey(kind, group)]) end
+  if value == nil then value = tonumber(cfg[UF.powerText.SizeKey(kind)]) end
   if not value or value < 6 then return 0 end
   return value
 end
 
 function UF.powerText.ApplySize(frame, box, kind)
   if not box then return end
-  local want = UF.powerText.Size(kind)
+  local want = UF.powerText.Size(kind, UF.powerText.Group(frame))
   local size = want
   if want <= 0 then
     if not box.puiTextSize then return end
@@ -4952,17 +4976,32 @@ function U.SetUnitFrameTextsOnHover(value)
   return true
 end
 
-function U.GetUnitFrameTextSize(kind)
-  return UF.powerText.Size(kind)
+-- group is a frame group from UF.powerText.groups. Without one the accessors
+-- address the global size every group falls back to; setting that clears the
+-- groups' own sizes so the settings page still sets every frame at once.
+function U.GetUnitFrameTextSize(kind, group)
+  return UF.powerText.Size(kind, group)
 end
 
-function U.SetUnitFrameTextSize(kind, value)
+function U.SetUnitFrameTextSize(kind, value, group)
   if kind ~= "health" and kind ~= "power" then return false end
   local cfg = UF.powerText.Config()
   value = tonumber(value) or 0
   if value < 6 then value = 0 end
-  if cfg[kind .. "TextSize"] == value then return true end
-  cfg[kind .. "TextSize"] = value
+  local key = UF.powerText.SizeKey(kind, group)
+  local changed = cfg[key] ~= value
+  cfg[key] = value
+  if not group then
+    local i
+    for i = 1, table.getn(UF.powerText.groups) do
+      local own = UF.powerText.SizeKey(kind, UF.powerText.groups[i])
+      if cfg[own] ~= nil then
+        cfg[own] = nil
+        changed = true
+      end
+    end
+  end
+  if not changed then return true end
   RefreshAll()
   if type(U.RefreshUnitFrameSettingsViews) == "function" then
     U.RefreshUnitFrameSettingsViews()

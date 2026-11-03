@@ -314,6 +314,30 @@ function pm.LinkClick(win, reagentIndex)
   if ok then pm.InsertChatLink(link) end
 end
 
+-- One chat line for a recipe row: the recipe link, then every reagent as
+-- "Nx link". Reagents that would pass the 255 character chat limit are dropped.
+function pm.RecipeLine(win, index)
+  local linkOk, line = pm.Call(win.kind.link, index)
+  if not linkOk or type(line) ~= "string" or line == "" then
+    line = pm.Info(win, index)
+    if type(line) ~= "string" or line == "" then return nil end
+  end
+  local countOk, count = pm.Call(win.kind.numReagents, index)
+  count = (countOk and tonumber(count)) or 0
+  local separator = ": "
+  for i = 1, count do
+    local infoOk, _, _, need = pm.Call(win.kind.reagent, index, i)
+    local reagentOk, reagentLink = pm.Call(win.kind.reagentLink, index, i)
+    if reagentOk and type(reagentLink) == "string" and reagentLink ~= "" then
+      local part = separator .. ((infoOk and tonumber(need)) or 1) .. "x " .. reagentLink
+      if string.len(line) + string.len(part) > 255 then break end
+      line = line .. part
+      separator = ", "
+    end
+  end
+  return line
+end
+
 function pm.Queue(win)
   U.DeferOnce(win.key, function()
     pm.Refresh(win)
@@ -554,6 +578,7 @@ function pm.OnRowClick(win, row)
     win.selectionHidden = nil
     if entry.index ~= pm.Selected(win) then win.count = 1 end
     pm.Call(win.kind.select, entry.index)
+    pm.InsertChatLink(pm.RecipeLine(win, entry.index))
   end
   pm.Queue(win)
 end

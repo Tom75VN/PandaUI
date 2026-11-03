@@ -4,6 +4,52 @@ In-game tests still owed on OctoWoW. Tick an item once it passes. Report a
 failure with its number and what you saw (exact error text if any); every
 result is recorded in `knowledge.json` (`USER_CONFIRMED_INGAME`).
 
+## Blizzard "Show Action Bar" options (coded 2026-11-03, not yet tested)
+
+Code: `modules/actionbar.lua` (`nativeToggles`).
+Knowledge record: `actionbars.blizzard_show_multibar_toggles_hidden`. `/reload` is enough.
+
+- [ ] SB1. After the reload, any Blizzard bar box already ticked now shows its PandaUI bar.
+- [ ] SB2. Esc > Interface Options: tick Bottom Left, Bottom Right, Right and Right 2: PandaUI bars 5, 4, 2 and 3 appear at once.
+- [ ] SB3. Untick one and press Cancel: the bar is back as before Cancel.
+- [ ] SB4. Untick one and press Okay: its bar hides. `/reload`: it stays hidden.
+- [ ] SB5. Disable a bar in `/pui` > Action Bars with its Blizzard box still ticked, then `/reload`: it stays off.
+
+## Friendly and enemy nameplates together (coded 2026-11-03, not yet tested)
+
+Code: `modules/nameplates.lua` (`style.ApplyVisibility`, `ScheduleVisibility`, `SyncKeyVisibility`).
+Knowledge record: `nameplates.friend_enemy_visibility_keys`. `/reload` is enough.
+Stand near friendly and enemy units (a town with guards and a hostile mob nearby, or players of both factions).
+
+- [ ] NV1. Nameplates > General: tick both "Show on hostile units" and "Show on friendly units": both plate types show.
+- [ ] NV2. `/reload`, then take a loading screen (hearth or instance): both still show.
+- [ ] NV3. Press V: only enemy plates. Press Shift-V: only friendly. Press Ctrl-V: both.
+- [ ] NV4. After NV3, take a loading screen: the last key choice is kept, and the settings ticks match it.
+
+## Edit mode magnet (coded 2026-11-03, probe)
+
+Code: `core/mover.lua` (`magnet`, `SnapToMovers`, `U.MoverMagnetTest`), `modules/xpbar.lua` (`SnapPadding`).
+Probe `magnet` (`PandaRuntimeProbe/MoverScaleProbe.lua`). Knowledge record: `mover.magnet_snaps_thin_bars_flush`.
+Already confirmed by the 20:47 trace: swing bar joined the cast bar 1.00 apart, centres aligned.
+
+- [x] MG1. `/prp magnet` (magnet.v1, 2026-11-03 20:58): Alt, grouping, bar2/bar1 and castbar/player joins passed at exactly 1 unit; xp/rep pair untestable in that layout.
+- [x] MG1b. magnet.v2 (2026-11-03 21:05): computed padding equals measured art on every mover; bar2/bar1 joins at 8.98 (6.3 + 1.68 + 1), Alt and grouping pass. xp/rep pair blocked by the layout (bar3 3 units above XP).
+- [x] MG2. Confirmed in game 2026-11-03: "done it work well".
+
+## Hunter swing timer (probe, needs a hunter, added 2026-11-03)
+
+Code: `modules/swingbar.lua`. Probe `huntswing` (`PandaRuntimeProbe/HuntSwingProbe.lua`).
+Knowledge record: `combat.swingbar_hunter_lanes_jump_unverified`.
+Relaunch the client once (new probe file). Hunter with a bow or gun, a pet, a melee weapon, Auto Shot on a bar.
+
+- [x] HS1. `/prp huntswing`, then Auto Shot a mob (or dummy) for about 30 s.
+- [x] HS2. During that, use instant shots (Arcane Shot, Serpent Sting, Hunter's Mark) and send the pet in.
+- [x] HS3. Then go into melee for about 20 s (Raptor Strike, melee attack).
+- [x] HS4. `/prp huntswing stop`, then `/prp reload`. Note what the swing bar looked like.
+  Done 2026-11-03 at level 1 (no pet, no instant shots): no jumping, bars followed every shot and swing.
+- [ ] HS5. Repeat HS1-HS4 at level 6+ weaving Arcane Shot and Serpent Sting during Auto Shot.
+- [ ] HS6. Repeat at level 10+ with the pet attacking.
+
 ## Action button press and Retail cast animations (coded 2026-11-01, not yet tested)
 
 Code: `modules/actionbarpress.lua`, `modules/actionbar.lua` (`OnButtonClick`),

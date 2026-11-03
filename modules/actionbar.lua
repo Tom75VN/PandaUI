@@ -604,7 +604,36 @@ function modernWowAction.StyleBarOrnaments(entry, bar)
     backgroundRight = backgroundRight,
     left = left,
     right = right,
+    -- Which snapMargin set the ornaments use (SnapArt).
+    art = faction == "Horde" and "wyvern" or "gryphon",
   }
+end
+
+-- The bar's drawn art for the edit-mode magnet (core/mover.lua
+-- magnet.ArtPadding): button rings and faces, and bar 1's housing and
+-- ornaments, each with its texture's measured transparent margin. Hidden
+-- regions are skipped there, so this lists everything that may show.
+function modernWowAction.SnapArt(entry)
+  if not modernWowAction.active or not entry then return nil end
+  local margin = M.modernWow.actionBar.snapMargin
+  local list, i = {}, nil
+  for i = 1, table.getn(entry.buttons or {}) do
+    local state = entry.buttons[i] and entry.buttons[i].puiModernWow
+    if state and state.border then
+      table.insert(list, { region = state.border, m = margin.border })
+    end
+    if state and state.face then
+      table.insert(list, { region = state.face, m = margin.face })
+    end
+  end
+  local o = entry.modernWowOrnaments
+  if o then
+    table.insert(list, { region = o.backgroundLeft, m = margin.background })
+    table.insert(list, { region = o.backgroundRight, m = margin.background })
+    table.insert(list, { region = o.left, m = margin[o.art] })
+    table.insert(list, { region = o.right, m = margin[o.art .. "Flip"] })
+  end
+  return list
 end
 
 function modernWowAction.SetBarOrnamentsShown(entry, shown)
@@ -2824,6 +2853,7 @@ local function CreateBar(bar)
     -- Disabled bars keep their stored position but must not offer a drag
     -- handle in edit mode; see core/mover.lua.
     visible = function() return IsEnabled(bar) end,
+    snapArt = function() return modernWowAction.SnapArt(bars[bar]) end,
   })
 
   return bars[bar]
@@ -3509,6 +3539,71 @@ function AB:OnInit()
   ConfigureBarOwnership()
 end
 
+-- ---------------------------------------------------------------------------
+-- Blizzard "Show bar" toggles
+--
+-- PandaUI hides the stock MultiBars, so the Interface Options "Show ... Action
+-- Bar" boxes would otherwise do nothing visible. Each change of those boxes is
+-- mirrored onto the PandaUI bar that uses the same slots. WORKING_SOURCE
+-- (octo-framexml): the boxes write SHOW_MULTI_ACTIONBAR_1..4 then call
+-- MultiActionBar_Update, as do Cancel and PLAYER_ENTERING_WORLD (after
+-- GetActionBarToggles). MultiBarLeft (4) shows only together with 3.
+--
+-- cfg.nativeBarToggles stores the last state seen ("1010"). Only a changed box
+-- writes a bar, so a PandaUI-side choice is never overridden on login. A box
+-- with no stored state counts as off, so on first use the boxes already ticked
+-- enable their bar.
+--
+-- OnEnable can run after the client's login MultiActionBar_Update, so Install
+-- also reads the saved GetActionBarToggles once. That pass only ever enables:
+-- whether the call reports the saved state that early is not runtime-tested,
+-- and a premature all-nil reply must not switch bars off.
+-- ---------------------------------------------------------------------------
+local nativeToggles = {
+  -- PandaUI bar per toggle position, in BAR_SLOT_BASE order.
+  bars = { 5, 4, 2, 3 },
+}
+
+function nativeToggles.State(s1, s2, s3, s4)
+  return {
+    s1 and true or false,
+    s2 and true or false,
+    s3 and true or false,
+    (s3 and s4) and true or false,
+  }
+end
+
+function nativeToggles.Sync(state, enableOnly)
+  if not cfg then return end
+  local stored = cfg.nativeBarToggles
+  if type(stored) ~= "string" or string.len(stored) ~= 4 then stored = "0000" end
+  local text, i = "", nil
+  for i = 1, 4 do
+    local on = state[i]
+    local was = string.sub(stored, i, i) == "1"
+    if on ~= was and (on or not enableOnly) then
+      U.SetActionBarSetting(nativeToggles.bars[i], "Enabled", on)
+      was = on
+    end
+    text = text .. (was and "1" or "0")
+  end
+  cfg.nativeBarToggles = text
+end
+
+function nativeToggles.FromGlobals()
+  nativeToggles.Sync(nativeToggles.State(
+    U.G("SHOW_MULTI_ACTIONBAR_1"), U.G("SHOW_MULTI_ACTIONBAR_2"),
+    U.G("SHOW_MULTI_ACTIONBAR_3"), U.G("SHOW_MULTI_ACTIONBAR_4")), false)
+end
+
+function nativeToggles.Install()
+  U.PostHookGlobal("MultiActionBar_Update", nativeToggles.FromGlobals)
+  local getToggles = U.G("GetActionBarToggles")
+  if type(getToggles) ~= "function" then return end
+  local ok, s1, s2, s3, s4 = pcall(getToggles)
+  if ok then nativeToggles.Sync(nativeToggles.State(s1, s2, s3, s4), true) end
+end
+
 function AB:OnEnable()
   if not cfg then
     cfg = U.ModuleConfig("actionbar", BuildDefaults())
@@ -3556,6 +3651,7 @@ function AB:OnEnable()
   -- After the highlight hooks, so a blocked key shows no press either.
   InstallMultiBindingGate()
   RegisterEvents()
+  nativeToggles.Install()
 
   -- Slot contents change rarely and cost the most calls; usable/active state
   -- is what the eye tracks. Cooldown digits and the GCD sweep register their

@@ -604,6 +604,19 @@ M.modernWow.actionBar = {
   borderOpening = 8 / 128,
   background = { x = 6, y = 14 },
   ornament = { size = 144, inset = 30, y = 10 },
+  -- Transparent margin of each texture's quad as { left, right, bottom,
+  -- top } fractions, alpha < 128 measured on the TGAs (2026-11-03), for the
+  -- edit-mode magnet (core/mover.lua magnet.ArtPadding). *Flip: drawn with
+  -- SetTexCoord(1, 0, 0, 1), so left and right swap.
+  snapMargin = {
+    border = { 2 / 128, 3 / 128, 3 / 128, 2 / 128 },
+    face = { 4 / 64, 4 / 64, 5 / 64, 4 / 64 },
+    background = { 0, 0, 17 / 128, 17 / 128 },
+    gryphon = { 102 / 512, 128 / 512, 116 / 512, 104 / 512 },
+    gryphonFlip = { 128 / 512, 102 / 512, 116 / 512, 104 / 512 },
+    wyvern = { 117 / 512, 127 / 512, 113 / 512, 94 / 512 },
+    wyvernFlip = { 127 / 512, 117 / 512, 113 / 512, 94 / 512 },
+  },
 }
 
 M.modernWow.settingStepperIcon = {

@@ -115,6 +115,40 @@ function modernWow.LayoutBorder(anchor)
   border[2]:SetHeight(height)
 end
 
+-- Edit-mode magnet padding (core/mover.lua magnet.Padding): how far each
+-- bar's drawn art reaches past its anchor, so the magnet's join spacing is
+-- measured between what is drawn.
+--
+-- modern-wow border.tga is 512 x 32 and visible (alpha >= 128) on rows 5-25
+-- only; it is drawn height + borderHeightExtra tall, centred on the bar, and
+-- each half width / 2 + borderWidthExtra wide from borderOverhang past its
+-- end, visible from column 1. For a 300 x 7 bar that is 1.7 to each side,
+-- 2.0 above and 1.5 below the anchor, not the 4.5 the texture box implies
+-- (magnet probe v2 2026-11-03 measured the same).
+-- knowledge.json mover.magnet_snaps_thin_bars_flush.
+local BORDER_ROWS, BORDER_FIRST_ROW, BORDER_END_ROW = 32, 5, 26
+local BORDER_COLS, BORDER_FIRST_COL = 512, 1
+
+local function SnapPadding(anchor)
+  -- Classic: everything is drawn inside the anchor.
+  if not modernWow.Enabled() then return 0 end
+  local ok, height = pcall(anchor.GetHeight, anchor)
+  height = ok and tonumber(height) or HEIGHT
+  local okW, width = pcall(anchor.GetWidth, anchor)
+  width = okW and tonumber(width) or WIDTH
+  local xp = M.modernWow.xpbar
+  local art = height + xp.borderHeightExtra
+  local texel = art / BORDER_ROWS
+  local top = art / 2 - BORDER_FIRST_ROW * texel - height / 2
+  local bottom = BORDER_END_ROW * texel - art / 2 - height / 2
+  local side = xp.borderOverhang - BORDER_FIRST_COL / BORDER_COLS *
+               (width / 2 + xp.borderWidthExtra)
+  if top < xp.fillTopOverhang then top = xp.fillTopOverhang end
+  if bottom < 0 then bottom = 0 end
+  if side < 0 then side = 0 end
+  return side, side, bottom, top
+end
+
 function modernWow.RefreshFillGeometry(bar)
   if not bar or not bar.SetValue then return end
   local value = bar.puiValue
@@ -639,6 +673,7 @@ local function Build()
   U.RegisterMover(MOVER_ID, xpAnchor, {
     label = U.L("MOVER_LABEL_XP_BAR"),
     default = { point = "BOTTOM", relativePoint = "BOTTOM", x = 0, y = 66 },
+    snapPadding = function() return SnapPadding(xpAnchor) end,
   })
 
   xpAnchor:EnableMouse(true)
@@ -665,6 +700,7 @@ local function Build()
     -- A disabled bar keeps its stored position but offers no drag handle in
     -- edit mode; see core/mover.lua / modules/microbar.lua.
     visible = function() return config and config.repEnabled end,
+    snapPadding = function() return SnapPadding(repAnchor) end,
   })
 end
 

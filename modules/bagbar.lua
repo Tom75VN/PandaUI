@@ -941,6 +941,11 @@ function bb.Build()
     -- one -- its contextual panel is where it is switched back on.
     visible = function() return bb.Available() end,
     scalable = true,
+    -- The free-slot count is drawn under the backpack, past the bar's box
+    -- (magnet probe 2026-11-03: 7.67 below); the magnet keeps clear of it.
+    snapArt = function()
+      return { { region = bb.backpack and bb.backpack.freeText } }
+    end,
   })
 
   bb.built = true

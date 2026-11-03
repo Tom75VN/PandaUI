@@ -4,6 +4,27 @@ Player-visible PandaUI changes, newest first. Keep every bullet short, clear and
 
 ## [Unreleased]
 
+## [0.13.4] - 2026-11-03
+
+### Added
+
+- Shift-click a recipe in the Professions window to link it and its reagents in chat.
+- Hold Alt while dragging in edit mode to move an element without snapping.
+
+### Changed
+
+- Edit mode snapping is gentler on thin elements, aligns only to nearby elements, and the magnet leaves 1 px between what joined elements draw.
+
+### Fixed
+
+- Friendly and enemy nameplates can be shown together, and V, Shift-V and Ctrl-V choices are kept after loading screens.
+- Nameplates no longer flash the default Blizzard plate, or a yellow health bar on hostile mobs, when a mob comes into range.
+- The edit-mode magnet no longer makes elements overlap, such as the XP and reputation bars.
+- Custom bag categories are kept after a reload.
+- Moving items into the bank no longer shows an "Invalid inventory slot" error.
+- In edit mode, the health and power text size of the player, target, pet and party frames is now set separately.
+- Blizzard's "Show Action Bar" interface options now turn the matching PandaUI action bars on and off.
+
 ## [0.13.3] - 2026-11-03
 
 ### Added

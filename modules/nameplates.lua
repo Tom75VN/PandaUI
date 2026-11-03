@@ -1494,6 +1494,16 @@ end
 
 -- The client's own switches; documented, unverified on this client, so a
 -- missing function is skipped rather than assumed.
+--
+-- WORKING_SOURCE (octo-framexml FrameXML/Bindings.xml:516-549): V and Shift-V
+-- each hide the other plate type, Ctrl-V shows both, and all three toggle on
+-- the globals NAMEPLATES_ON / FRIENDNAMEPLATES_ON. UIParent.lua:234,367 call
+-- UpdateNameplates() on VARIABLES_LOADED and PLAYER_ENTERING_WORLD, which
+-- always ends with HideFriendNameplates() (UIOptionsFrame.lua:767). So the
+-- globals are kept in step with pandaUI's settings (as pfUI-octo does), and a
+-- key press that changes them is saved back into those settings.
+local visibility = { armed = false }
+
 function style.ApplyVisibility()
   if not cfg.enabled then return end
   local fn = ResolveApiFn(cfg.showHostile and "ShowNameplates" or
@@ -1502,6 +1512,35 @@ function style.ApplyVisibility()
   fn = ResolveApiFn(cfg.showFriendly and "ShowFriendNameplates" or
                     "HideFriendNameplates")
   if fn then pcall(fn) end
+  NAMEPLATES_ON = cfg.showHostile and 1 or nil
+  FRIENDNAMEPLATES_ON = cfg.showFriendly and 1 or nil
+  visibility.hostile = cfg.showHostile and true or false
+  visibility.friendly = cfg.showFriendly and true or false
+end
+
+-- Runs on the next tick, after the stock PLAYER_ENTERING_WORLD handler has
+-- reset the plates, whatever the handler order. Key sync starts only then, so
+-- the client's own saved NAMEPLATES_ON restore is never taken for a key press.
+function style.ScheduleVisibility()
+  U.DeferOnce("nameplates.visibility", function()
+    style.ApplyVisibility()
+    visibility.armed = true
+  end)
+end
+
+-- A V / Shift-V / Ctrl-V press changes the globals; adopt it as the setting so
+-- the next loading screen keeps it.
+function style.SyncKeyVisibility()
+  if not visibility.armed then return end
+  local hostile = NAMEPLATES_ON and true or false
+  local friendly = FRIENDNAMEPLATES_ON and true or false
+  if hostile == visibility.hostile and friendly == visibility.friendly then
+    return
+  end
+  visibility.hostile = hostile
+  visibility.friendly = friendly
+  cfg.showHostile = hostile
+  cfg.showFriendly = friendly
 end
 
 -- ---------------------------------------------------------------------------
@@ -1886,13 +1925,10 @@ function U.RefreshNameplateTargetCast()
   end
 end
 
-local function AdoptPlate(frame)
-  local parts = ClassifyPlate(frame)
-  if not parts then
-    stats.rejected = stats.rejected + 1
-    return nil
-  end
-
+-- Silences every native part of one plate. Run on adoption and again each
+-- time a plate is shown or recycled onto a new unit, since the client
+-- re-lays out its native name and level then.
+local function MutePlate(parts)
   MuteTexture(parts.border)
   MuteTexture(parts.glow)
   MuteTexture(parts.raidicon)
@@ -1914,6 +1950,16 @@ local function AdoptPlate(frame)
   for i = 1, table.getn(parts.fontstrings) do
     MuteFontString(parts.fontstrings[i])
   end
+end
+
+local function AdoptPlate(frame)
+  local parts = ClassifyPlate(frame)
+  if not parts then
+    stats.rejected = stats.rejected + 1
+    return nil
+  end
+
+  MutePlate(parts)
 
   local overlay = BuildOverlay(frame, parts)
   registry[frame] = overlay
@@ -2001,6 +2047,14 @@ end
 -- the name last seen live, the player cache, and hostile. A neutral plate the
 -- player's side has engaged turns hostile (reaction.PlateEngaged).
 local function BaseUnitType(overlay, name)
+  -- Nampower: the plate's own unit decides. A plate just shown still carries
+  -- a stale or default tint for a moment, which drew hostile mobs yellow
+  -- before they turned red (user report 2026-11-03).
+  if overlay.guid then
+    local unitType = reaction.FromUnit(overlay.guid)
+    if unitType then return unitType end
+  end
+
   local r, g, b = Call(overlay.parts.healthbar, "GetStatusBarColor")
   local unitType = reaction.FromTint(r, g, b)
   if unitType then return unitType end
@@ -2237,6 +2291,69 @@ local function RefreshAll()
   end
 end
 
+-- Runs every frame. The 0.1s refresh left a new or recycled plate drawing
+-- its native art, and the previous unit's overlay, until the next tick: the
+-- flash seen when a mob comes into plate range. Only two reads per plate
+-- while nothing changes.
+--
+-- The client tints a just-shown plate a moment late (yellow before red, user
+-- report 2026-11-03), so for WATCH_TINT seconds after that its tint is read
+-- every frame too and a change redraws the plate at once.
+local WATCH_TINT = 0.5
+
+local function TintType(overlay)
+  return reaction.FromTint(Call(overlay.parts.healthbar, "GetStatusBarColor"))
+end
+
+local function WatchPlates()
+  local now = GetTime()
+  local i
+  for i = 1, table.getn(plateOrder) do
+    local overlay = plateOrder[i]
+    if overlay then
+      if Call(overlay.plate, "IsVisible") then
+        local raw = Call(overlay.parts.fontstrings[1], "GetText")
+        local redraw = false
+        if not overlay.live or raw ~= overlay.rawText then
+          overlay.live = true
+          overlay.rawText = raw
+          overlay.tintUntil = now + WATCH_TINT
+          overlay.tint = TintType(overlay)
+          MutePlate(overlay.parts)
+          overlay.cache.name = nil
+          redraw = true
+        elseif overlay.tintUntil then
+          if now > overlay.tintUntil then
+            overlay.tintUntil = nil
+          else
+            local tint = TintType(overlay)
+            if tint ~= overlay.tint then
+              overlay.tint = tint
+              redraw = true
+            end
+          end
+        end
+        if redraw then
+          local ok, err = pcall(RefreshPlate, overlay)
+          if not ok then U.Debug("nameplate refresh: " .. tostring(err)) end
+        end
+      elseif overlay.live then
+        overlay.live = false
+      end
+    end
+  end
+end
+
+-- WORKING_112_SOURCE (pfUI-octo modules/nameplates.lua:600): ClassicAPI fires
+-- NAME_PLATE_CREATED with the new plate frame as arg1, so it can be muted
+-- before it is ever drawn. Stock clients have no such event; the per-frame
+-- scan covers them.
+local function OnPlateCreated(_, frame)
+  if type(frame) ~= "table" or registry[frame] then return end
+  if U.PerfDisabled and U.PerfDisabled("plates") then return end
+  AdoptPlate(frame)
+end
+
 -- An option changed (U.SetNameplateSetting): drop every plate's draw cache so
 -- colours, outlines and text are re-applied, re-run the layout, and redraw now
 -- rather than on the next 0.1s tick.
@@ -2427,15 +2544,24 @@ function NP:OnEnable()
   -- documented as a no-op before that), and a loading screen may reset them.
   -- OnEnable itself may run on that very event (core/init.lua), so apply once
   -- now as well.
-  U.RegisterEvent("PLAYER_ENTERING_WORLD", style.ApplyVisibility)
-  style.ApplyVisibility()
+  U.RegisterEvent("PLAYER_ENTERING_WORLD", style.ScheduleVisibility)
+  style.ScheduleVisibility()
 
-  -- Discovery is cheap while the child count is unchanged, so it can share the
-  -- refresh tick. 0.1s keeps a new plate from lagging visibly behind the stock
-  -- one it replaces.
-  U.RegisterUpdate("nameplates.scan", 0.1, function()
+  if type(U.G("C_NamePlate")) == "table" then
+    U.RegisterEvent("NAME_PLATE_CREATED", OnPlateCreated)
+  end
+
+  -- Discovery and the shown/recycled check run every frame, so a new plate
+  -- never draws its native art; both are cheap while nothing changes. The
+  -- full refresh stays on 0.1s.
+  U.RegisterUpdate("nameplates.watch", 0, function()
     if U.PerfDisabled and U.PerfDisabled("plates") then return end
     ScanWorldFrame()
+    WatchPlates()
+  end)
+  U.RegisterUpdate("nameplates.scan", 0.1, function()
+    style.SyncKeyVisibility()
+    if U.PerfDisabled and U.PerfDisabled("plates") then return end
     RefreshAll()
   end)
 end

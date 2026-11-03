@@ -1209,6 +1209,9 @@ function BF:OnEnable()
             U.L("MOVER_LABEL_BUFFS"),
     visible = function() return U.GetNativeAuraFrameShown() end,
     setEditShown = SetEditShown,
+    -- The collapse arrow sits beside the row, past its box (magnet probe
+    -- 2026-11-03: 19 to the right); the magnet keeps clear of it.
+    snapArt = function() return { { region = toggle } } end,
   })
   U.OnPositionReset(function() return RestoreNativeAnchors() end)
 

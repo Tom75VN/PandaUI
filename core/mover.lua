@@ -409,59 +409,188 @@ local function Overlaps(left, right, bottom, top,
          top > otherBottom + ALIGNMENT_EPSILON
 end
 
-local function ClosestDelta(candidate, best, bestDistance)
+-- limit is the reach for this candidate; bestDistance the closest kept so far.
+local function ClosestDelta(candidate, best, bestDistance, limit)
   local distance = math.abs(candidate)
-  if distance <= MAGNET_DISTANCE and distance < bestDistance then
+  if distance <= (limit or MAGNET_DISTANCE) and distance < bestDistance then
     return candidate, distance
   end
   return best, bestDistance
 end
 
+-- Snap reach and spacing (knowledge.json mover.magnet_snaps_thin_bars_flush).
+-- A fixed 8-unit reach was wider than the 7-unit XP and reputation bars: every
+-- gap under 8 closed to flush, and with several lines per bar inside 8 units
+-- the bar jumped between targets.
+-- SPACING: the space every magnet join leaves between two anchors' drawn
+-- edges (user request 2026-11-03: at most 1-2 px between joined elements).
+local magnet = { MIN_REACH = 3, BIG = 1000000, SPACING = 1 }
+
+-- Half the thinner of the two anchors on that axis, between MIN_REACH and
+-- MAGNET_DISTANCE, then capped (half a grid cell with the grid on).
+function magnet.Reach(size, otherSize, cap)
+  local reach = tonumber(size) or MAGNET_DISTANCE * 2
+  if otherSize and otherSize < reach then reach = otherSize end
+  reach = reach / 2
+  if reach > MAGNET_DISTANCE then reach = MAGNET_DISTANCE end
+  if reach < magnet.MIN_REACH then reach = magnet.MIN_REACH end
+  if cap and cap < reach then reach = cap end
+  return reach + ALIGNMENT_EPSILON
+end
+
+-- The empty space between two intervals on one axis; 0 when they overlap.
+function magnet.Gap(low, high, otherLow, otherHigh)
+  if otherLow > high then return otherLow - high end
+  if low > otherHigh then return low - otherHigh end
+  return 0
+end
+
+-- How far an anchor's drawn art reaches past its box, as left, right,
+-- bottom, top in UIParent units. RegisterMover option snapPadding: a number
+-- for every side, or a function returning x, y or left, right, bottom, top in
+-- the frame's own units. Two anchors join with the facing sides' paddings
+-- plus SPACING between their boxes; most anchors draw inside their box and
+-- have none.
+-- The larger of snapPadding and the measured snapArt on each side. Cached
+-- for the length of a drag (magnet.cache, set by StartDrag): nothing being
+-- measured changes while one anchor is dragged.
+function magnet.Padding(entry)
+  if not entry then return 0, 0, 0, 0 end
+  local cached = magnet.cache and magnet.cache[entry]
+  if cached then return cached[1], cached[2], cached[3], cached[4] end
+  local l, r, b, t = magnet.FixedPadding(entry)
+  if entry.snapArt then
+    local al, ar, ab, at = magnet.ArtPadding(entry)
+    if al > l then l = al end
+    if ar > r then r = ar end
+    if ab > b then b = ab end
+    if at > t then t = at end
+  end
+  if magnet.cache then magnet.cache[entry] = { l, r, b, t } end
+  return l, r, b, t
+end
+
+-- RegisterMover option snapArt: a function returning a list of
+-- { region = <Texture/FontString/Frame>, m = { l, r, b, t } }, m being the
+-- transparent fraction of the region's drawn quad on each screen side
+-- (measured offline from the texture's alpha). Each visible region's opaque
+-- part past the anchor's box, per side, in UIParent units. An empty
+-- FontString draws nothing and is skipped.
+magnet.NO_MARGIN = { 0, 0, 0, 0 }
+
+function magnet.ArtPadding(entry)
+  local ok, list = pcall(entry.snapArt)
+  if not ok or type(list) ~= "table" then return 0, 0, 0, 0 end
+  local frame = entry.frame
+  local fl, fr = Edge(frame, "GetLeft"), Edge(frame, "GetRight")
+  local fb, ft = Edge(frame, "GetBottom"), Edge(frame, "GetTop")
+  local frameScale = Edge(frame, "GetEffectiveScale")
+  if not fl or not fr or not fb or not ft or not frameScale or
+     frameScale <= 0 then return 0, 0, 0, 0 end
+  local l, r, b, t, i = 0, 0, 0, 0, nil
+  for i = 1, table.getn(list) do
+    local region = list[i] and list[i].region
+    local m = list[i] and list[i].m or magnet.NO_MARGIN
+    local okV, visible = false, nil
+    if region then okV, visible = pcall(region.IsVisible, region) end
+    if okV and visible then
+      local okK, kind = pcall(region.GetObjectType, region)
+      if okK and kind == "FontString" then
+        local okT, text = pcall(region.GetText, region)
+        if not okT or not text or text == "" then visible = nil end
+      end
+    end
+    local rl, rr = Edge(region, "GetLeft"), Edge(region, "GetRight")
+    local rb, rt = Edge(region, "GetBottom"), Edge(region, "GetTop")
+    if okV and visible and rl and rr and rb and rt and rr > rl and
+       rt > rb then
+      -- A region reports edges in its own frame's units.
+      local okP, owner = pcall(region.GetParent, region)
+      local k = okP and Edge(owner, "GetEffectiveScale")
+      k = k and k / frameScale or 1
+      rl, rr, rb, rt = rl * k, rr * k, rb * k, rt * k
+      local w, h = rr - rl, rt - rb
+      -- The opaque part, then each side only where it lies over the box on
+      -- the other axis: an ornament wholly beside the box (bar 1's gryphons)
+      -- widens it sideways but not above or below.
+      local vl, vr = rl + m[1] * w, rr - m[2] * w
+      local vb, vt = rb + m[3] * h, rt - m[4] * h
+      if vt > fb and vb < ft then
+        if fl - vl > l then l = fl - vl end
+        if vr - fr > r then r = vr - fr end
+      end
+      if vr > fl and vl < fr then
+        if fb - vb > b then b = fb - vb end
+        if vt - ft > t then t = vt - ft end
+      end
+    end
+  end
+  local ratio = EntryScale(entry)
+  return l * ratio, r * ratio, b * ratio, t * ratio
+end
+
+-- snapPadding on its own (see magnet.Padding).
+function magnet.FixedPadding(entry)
+  local pad = entry and entry.snapPadding
+  if not pad then return 0, 0, 0, 0 end
+  local l, r, b, t
+  if type(pad) == "function" then
+    local ok, p1, p2, p3, p4 = pcall(pad)
+    if not ok then return 0, 0, 0, 0 end
+    l, r, b, t = tonumber(p1) or 0, tonumber(p2), tonumber(p3), tonumber(p4)
+    if not b then
+      -- x, y form.
+      b, t = r or l, r or l
+      r = l
+    end
+  else
+    l = tonumber(pad) or 0
+  end
+  r, b = r or l, b or l
+  t = t or b
+  local ratio = EntryScale(entry)
+  return l * ratio, r * ratio, b * ratio, t * ratio
+end
+
+-- Alt held: the drag follows the cursor with no grid, magnet or alignment.
+function magnet.Free()
+  local fn = U.G("IsAltKeyDown")
+  if type(fn) ~= "function" then return false end
+  local ok, down = pcall(fn)
+  return ok and down and down ~= 0 and true or false
+end
+
 -- Smart alignment along one axis: the anchor's low edge, centre and high edge
--- against the same three lines of another anchor, nine pairs, in two tiers.
--- Same-line pairs (low-low, centre-centre, high-high) are kept apart from the
--- six cross pairs and win whenever one is in reach: an anchor's centre and
--- edge are often closer together than a grid cell, and closest-of-nine then
--- let a centre-to-edge match capture every step, so centre-to-centre was
--- never reachable (user screenshot 2026-10-26, swing bar beside cast bar;
--- knowledge.json mover.smart_alignment_guides_unverified).
+-- onto the same line of another anchor (low-low, centre-centre, high-high).
+-- The six cross pairs (centre onto an edge, an edge onto the opposite edge)
+-- are gone: on thin anchors they put a target every few units and the snap
+-- jumped between them. Edge-to-opposite-edge is the magnet's contact pull.
 local function AlignDelta(low, high, otherLow, otherHigh,
-                          same, sameDistance, cross, crossDistance)
+                          best, bestDistance, limit)
   local mid, otherMid = (low + high) / 2, (otherLow + otherHigh) / 2
-  same, sameDistance = ClosestDelta(otherLow - low, same, sameDistance)
-  same, sameDistance = ClosestDelta(otherMid - mid, same, sameDistance)
-  same, sameDistance = ClosestDelta(otherHigh - high, same, sameDistance)
-  cross, crossDistance = ClosestDelta(otherLow - high, cross, crossDistance)
-  cross, crossDistance = ClosestDelta(otherHigh - low, cross, crossDistance)
-  cross, crossDistance = ClosestDelta(otherMid - low, cross, crossDistance)
-  cross, crossDistance = ClosestDelta(otherMid - high, cross, crossDistance)
-  cross, crossDistance = ClosestDelta(otherLow - mid, cross, crossDistance)
-  cross, crossDistance = ClosestDelta(otherHigh - mid, cross, crossDistance)
-  return same, sameDistance, cross, crossDistance
+  best, bestDistance = ClosestDelta(otherLow - low, best, bestDistance, limit)
+  best, bestDistance = ClosestDelta(otherMid - mid, best, bestDistance, limit)
+  best, bestDistance = ClosestDelta(otherHigh - high, best, bestDistance,
+                                    limit)
+  return best, bestDistance
 end
 
 -- The other anchor's line that one of the anchor's own three lines sits
--- exactly on, or nil. sameOnly checks only the same-line pairs, so the guide
--- shows the match the snap preferred. Drives the red alignment guide.
-local function AlignedLine(low, high, otherLow, otherHigh, sameOnly)
+-- exactly on (same-line pairs only, as AlignDelta), or nil. Drives the red
+-- alignment guide.
+local function AlignedLine(low, high, otherLow, otherHigh)
   local mid = (low + high) / 2
   local otherMid = (otherLow + otherHigh) / 2
   if math.abs(low - otherLow) <= ALIGNMENT_EPSILON then return otherLow end
   if math.abs(mid - otherMid) <= ALIGNMENT_EPSILON then return otherMid end
   if math.abs(high - otherHigh) <= ALIGNMENT_EPSILON then return otherHigh end
-  if sameOnly then return nil end
-  local line, i
-  for i = 1, 3 do
-    if i == 1 then line = otherLow
-    elseif i == 2 then line = otherMid
-    else line = otherHigh end
-    if math.abs(low - line) <= ALIGNMENT_EPSILON or
-       math.abs(mid - line) <= ALIGNMENT_EPSILON or
-       math.abs(high - line) <= ALIGNMENT_EPSILON then
-      return line
-    end
-  end
   return nil
+end
+
+-- Alignment only considers anchors near on the other axis: within a quarter
+-- of the screen. Far anchors no longer capture the drag.
+function magnet.Near(low, high, otherLow, otherHigh, screenSize)
+  return magnet.Gap(low, high, otherLow, otherHigh) <= screenSize / 4
 end
 
 -- Where a frame is, as { point, relative, relativePoint, x, y }. A UIParent
@@ -834,6 +963,83 @@ function trace.Event(kind, entry, position, extra)
   trace.Log(trace.events, row)
 end
 
+-- Drawn content past an anchor's box, per side in UIParent units, with the
+-- widget reaching furthest on each side (name or type, texture path). Read
+-- only while tracing: it is the evidence for each mover's snapPadding. Box
+-- sizes cannot see a texture's transparent margin, so a side's texture is
+-- named for an offline alpha check (mover.magnet_snaps_thin_bars_flush).
+-- Only visible widgets are read; UIParent and WorldFrame never are
+-- (frames.root_frame_point_read_crash_suspected).
+trace.OVERFLOW_LIMIT = 600
+
+function trace.Describe(object)
+  local row = { name = trace.Name(object) }
+  local ok, kind = pcall(object.GetObjectType, object)
+  if ok then row.kind = kind end
+  if kind == "Texture" then
+    local texOk, path = pcall(object.GetTexture, object)
+    if texOk then row.tex = path end
+  end
+  return row
+end
+
+function trace.Overflow(entry)
+  local boxLeft, boxRight, boxBottom, boxTop = LiveRect(entry)
+  if not boxLeft then return nil end
+  local uiLeft = Edge(UIParent, "GetLeft") or 0
+  local uiBottom = Edge(UIParent, "GetBottom") or 0
+  local out = { l = 0, r = 0, b = 0, t = 0, read = 0 }
+
+  local function Measure(object, ratio)
+    local ok, visible = pcall(object.IsVisible, object)
+    if not ok or not visible then return false end
+    local left, right = Edge(object, "GetLeft"), Edge(object, "GetRight")
+    local bottom, top = Edge(object, "GetBottom"), Edge(object, "GetTop")
+    if left and right and bottom and top and right > left and top > bottom then
+      left, right = left * ratio - uiLeft, right * ratio - uiLeft
+      bottom, top = bottom * ratio - uiBottom, top * ratio - uiBottom
+      if boxLeft - left > out.l then
+        out.l, out.lBy = boxLeft - left, trace.Describe(object)
+      end
+      if right - boxRight > out.r then
+        out.r, out.rBy = right - boxRight, trace.Describe(object)
+      end
+      if boxBottom - bottom > out.b then
+        out.b, out.bBy = boxBottom - bottom, trace.Describe(object)
+      end
+      if top - boxTop > out.t then
+        out.t, out.tBy = top - boxTop, trace.Describe(object)
+      end
+    end
+    return true
+  end
+
+  local function Walk(frame, depth)
+    if out.read >= trace.OVERFLOW_LIMIT or depth > 8 then return end
+    if frame == entry.handle or frame == entry.dragInput or
+       frame == UIParent or frame == WorldFrame then return end
+    out.read = out.read + 1
+    if not Measure(frame, U.FrameUIRatio(frame) or 1) then return end
+    local ratio = U.FrameUIRatio(frame) or 1
+    local list, i = { pcall(frame.GetRegions, frame) }, nil
+    if list[1] then
+      for i = 2, table.getn(list) do
+        out.read = out.read + 1
+        Measure(list[i], ratio)
+      end
+    end
+    list = { pcall(frame.GetChildren, frame) }
+    if list[1] then
+      for i = 2, table.getn(list) do Walk(list[i], depth + 1) end
+    end
+  end
+
+  Walk(entry.frame, 0)
+  out.l, out.r = Rounded(out.l), Rounded(out.r)
+  out.b, out.t = Rounded(out.b), Rounded(out.t)
+  return out
+end
+
 -- Every registered mover, as the snapper sees it and as the client draws it.
 function trace.Snapshot()
   local rows, i = {}, nil
@@ -868,7 +1074,13 @@ function trace.Snapshot()
         frame = trace.Widget(entry.frame),
         handle = trace.Widget(entry.handle),
         input = trace.Widget(entry.dragInput),
+        overflow = trace.Overflow(entry),
       })
+      -- The padding the magnet uses now, beside the measured overflow.
+      local padL, padR, padB, padT = magnet.Padding(entry)
+      local row = rows[table.getn(rows)]
+      row.padL, row.padR = Rounded(padL), Rounded(padR)
+      row.padB, row.padT = Rounded(padB), Rounded(padT)
     end
   end
   return rows
@@ -1067,10 +1279,13 @@ end
 --     cursor's unsnapped position (rawX/rawY) so the grid cell the anchor
 --     happens to sit in cannot hold it out of magnet range; a hit on an axis
 --     replaces the grid value on that axis only, and the other axis stays on
---     the grid;
---   * smart alignment -- the screen centre, and any of the anchor's left/
---     centre/right (bottom/centre/top) lines onto any of another anchor's,
---     touching or not -- runs in both modes. With the grid on it is measured
+--     the grid. It stops short of flush by both anchors' snapPadding;
+--   * every reach is half the thinner anchor of the pair on that axis,
+--     between 3 and MAGNET_DISTANCE (magnet.Reach);
+--   * smart alignment -- the screen centre, and the anchor's left/centre/
+--     right (bottom/centre/top) line onto the same line of another anchor
+--     within a quarter screen on the other axis, touching or not -- runs in
+--     both modes. With the grid on it is measured
 --     from the grid position, within half a cell (at most MAGNET_DISTANCE):
 --     the grid keeps stepping, and the one step nearest a line lands on it
 --     exactly. Measured from the cursor instead (the first phase-1 build),
@@ -1100,50 +1315,65 @@ local function SnapToMovers(entry, point, relativePoint, x, y, gridOn,
   })
   if not left or not gLeft then return x, y, false, false end
 
-  local reach = MAGNET_DISTANCE
-  if gridOn and GridSize() / 2 < reach then reach = GridSize() / 2 end
-  reach = reach + ALIGNMENT_EPSILON
-  local bestX, bestY, bestXDistance, bestYDistance = nil, nil,
-    MAGNET_DISTANCE + 1, MAGNET_DISTANCE + 1
-  -- Same-line tier (screen centre included) and cross tier, per axis.
-  local alignX, alignY, alignXDistance, alignYDistance = nil, nil,
-    reach, reach
-  local crossX, crossY, crossXDistance, crossYDistance = nil, nil,
-    reach, reach
+  -- Reach scales with the thinner anchor of each pair (magnet.Reach); the
+  -- alignment reach is also capped at half a grid cell with the grid on.
+  local width, height = right - left, top - bottom
+  local cap = gridOn and GridSize() / 2 or nil
+  -- The dragged anchor's padding carries the join SPACING, so contact and
+  -- the collision barrier below both leave it between the two drawn edges.
+  local padL, padR, padB, padT = magnet.Padding(entry)
+  padL, padR = padL + magnet.SPACING, padR + magnet.SPACING
+  padB, padT = padB + magnet.SPACING, padT + magnet.SPACING
+  local screenWidth, screenHeight = U.UIWidth(), U.UIHeight()
+  local big = magnet.BIG
+  local bestX, bestY, bestXDistance, bestYDistance = nil, nil, big, big
+  local alignX, alignY, alignXDistance, alignYDistance = nil, nil, big, big
   local i
   alignX, alignXDistance = ClosestDelta(
-    U.UIWidth() / 2 - (gLeft + gRight) / 2, alignX, alignXDistance)
+    screenWidth / 2 - (gLeft + gRight) / 2, alignX, alignXDistance,
+    magnet.Reach(width, nil, cap))
   alignY, alignYDistance = ClosestDelta(
-    U.UIHeight() / 2 - (gBottom + gTop) / 2, alignY, alignYDistance)
+    screenHeight / 2 - (gBottom + gTop) / 2, alignY, alignYDistance,
+    magnet.Reach(height, nil, cap))
   for i = 1, table.getn(moverOrder) do
     local other = movers[moverOrder[i]]
     if other ~= entry and IsEntryVisible(other) and
        not IsFollower(entry, other) then
-      local position = OtherPosition(other)
       local otherLeft, otherRight, otherBottom, otherTop =
-        MoverBounds(other, position)
+        MoverBounds(other, OtherPosition(other))
       if otherLeft then
-        alignX, alignXDistance, crossX, crossXDistance = AlignDelta(
-          gLeft, gRight, otherLeft, otherRight,
-          alignX, alignXDistance, crossX, crossXDistance)
-        alignY, alignYDistance, crossY, crossYDistance = AlignDelta(
-          gBottom, gTop, otherBottom, otherTop,
-          alignY, alignYDistance, crossY, crossYDistance)
-      end
-      -- Grid on: edge contact from the cursor position, as before. Grid off
-      -- the alignment pass above already holds these pairs.
-      if otherLeft and gridOn and magnetOn then
-        if IntervalsNear(bottom, top, otherBottom, otherTop) then
-          bestX, bestXDistance = ClosestDelta(
-            otherLeft - right, bestX, bestXDistance)
-          bestX, bestXDistance = ClosestDelta(
-            otherRight - left, bestX, bestXDistance)
+        local otherWidth = otherRight - otherLeft
+        local otherHeight = otherTop - otherBottom
+        if magnet.Near(gBottom, gTop, otherBottom, otherTop, screenHeight) then
+          alignX, alignXDistance = AlignDelta(
+            gLeft, gRight, otherLeft, otherRight, alignX, alignXDistance,
+            magnet.Reach(width, otherWidth, cap))
         end
-        if IntervalsNear(left, right, otherLeft, otherRight) then
-          bestY, bestYDistance = ClosestDelta(
-            otherBottom - top, bestY, bestYDistance)
-          bestY, bestYDistance = ClosestDelta(
-            otherTop - bottom, bestY, bestYDistance)
+        if magnet.Near(gLeft, gRight, otherLeft, otherRight, screenWidth) then
+          alignY, alignYDistance = AlignDelta(
+            gBottom, gTop, otherBottom, otherTop, alignY, alignYDistance,
+            magnet.Reach(height, otherHeight, cap))
+        end
+        -- Edge contact, from the cursor position in both grid modes, leaving
+        -- both anchors' padding between them. Magnet only.
+        if magnetOn then
+          -- Facing sides only: this anchor's right against the other's left,
+          -- its top against the other's bottom, and so on.
+          local oPadL, oPadR, oPadB, oPadT = magnet.Padding(other)
+          if IntervalsNear(bottom, top, otherBottom, otherTop) then
+            local reach = magnet.Reach(width, otherWidth)
+            bestX, bestXDistance = ClosestDelta(
+              otherLeft - (padR + oPadL) - right, bestX, bestXDistance, reach)
+            bestX, bestXDistance = ClosestDelta(
+              otherRight + (padL + oPadR) - left, bestX, bestXDistance, reach)
+          end
+          if IntervalsNear(left, right, otherLeft, otherRight) then
+            local reach = magnet.Reach(height, otherHeight)
+            bestY, bestYDistance = ClosestDelta(
+              otherBottom - (padT + oPadB) - top, bestY, bestYDistance, reach)
+            bestY, bestYDistance = ClosestDelta(
+              otherTop + (padB + oPadT) - bottom, bestY, bestYDistance, reach)
+          end
         end
       end
     end
@@ -1154,8 +1384,6 @@ local function SnapToMovers(entry, point, relativePoint, x, y, gridOn,
   -- Contact deltas are from the cursor position, alignment deltas from the
   -- grid position (x, y).
   local ratio = EntryScale(entry)
-  if not alignX then alignX = crossX end
-  if not alignY then alignY = crossY end
   if bestX then
     x = fromX + bestX / ratio
   elseif alignX then
@@ -1212,6 +1440,18 @@ local function SnapToMovers(entry, point, relativePoint, x, y, gridOn,
          not IsFollower(entry, other) then
         local otherLeft, otherRight, otherBottom, otherTop =
           MoverBounds(other, OtherPosition(other))
+        -- The barrier is the other anchor grown by both paddings, so an
+        -- escape leaves the padding gap rather than flush. A flush escape let
+        -- the grid or a fast drag put the XP and rep bars edge to edge,
+        -- borders overlapping (offline replay 2026-11-03,
+        -- mover.magnet_snaps_thin_bars_flush).
+        if otherLeft then
+          local oPadL, oPadR, oPadB, oPadT = magnet.Padding(other)
+          otherLeft = otherLeft - padR - oPadL
+          otherRight = otherRight + padL + oPadR
+          otherBottom = otherBottom - padT - oPadB
+          otherTop = otherTop + padB + oPadT
+        end
         if otherLeft and Overlaps(left, right, bottom, top,
                                   otherLeft, otherRight,
                                   otherBottom, otherTop) then
@@ -1331,7 +1571,9 @@ local function ResolveSnap(entry, point, relative, relativePoint, x, y)
   local snapped = false
   local sample = trace.Begin(entry, point, relativePoint, x, y, config)
   local rawX, rawY = x, y
-  if config.gridShown then
+  -- Alt held: no grid, magnet or alignment; the screen clamp still applies.
+  local free = magnet.Free()
+  if config.gridShown and not free then
     local sx, sy = SnapPosition(entry, point, relativePoint, x, y)
     snapped = sx ~= x or sy ~= y
     x, y = sx, sy
@@ -1339,7 +1581,7 @@ local function ResolveSnap(entry, point, relative, relativePoint, x, y)
   local gridX, gridY = x, y
 
   -- Alignment always; contact and overlap only with the magnet on.
-  if not relative or relative == UIParent then
+  if not free and (not relative or relative == UIParent) then
     local magneticX, magneticY
     x, y, magneticX, magneticY =
       SnapToMovers(entry, point, relativePoint, x, y, config.gridShown,
@@ -1553,8 +1795,12 @@ local function CollectFollowers(dragged)
       local position = EntryPosition(other)
       local left, right, bottom, top = MoverBounds(other, position)
       if left then
-        rects[other.id] = { left = left, right = right,
-                            bottom = bottom, top = top }
+        -- Drawn edges, not boxes: two anchors the magnet joined keep their
+        -- art padding plus magnet.SPACING (under TOUCH_TOLERANCE) between
+        -- boxes and must still read as touching.
+        local padL, padR, padB, padT = magnet.Padding(other)
+        rects[other.id] = { left = left - padL, right = right + padR,
+                            bottom = bottom - padB, top = top + padT }
         positions[other.id] = position
       end
     end
@@ -1657,6 +1903,82 @@ local function ClearFollowers(entry)
   entry.followers = nil
   entry.followerSet = nil
   entry.followerDeltaX, entry.followerDeltaY = nil, nil
+end
+
+-- Diagnostic hooks for PandaRuntimeProbe's `magnet` group, not used by
+-- pandaUI itself (knowledge.json mover.magnet_snaps_thin_bars_flush).
+-- Distances are UIParent units from the anchor's current place.
+function U.MoverMagnetTest()
+  local api = { SPACING = magnet.SPACING }
+
+  -- The drop the snapper would settle on for a drag to (dx, dy) that was
+  -- last clear at (lastDx, lastDy). Moves nothing.
+  function api.Snap(id, dx, dy, lastDx, lastDy)
+    local entry = movers[id]
+    if not entry or entry.dragging then return nil end
+    local position = EntryPosition(entry)
+    if not position then return nil end
+    local ratio = EntryScale(entry)
+    local point = position.point
+    local relativePoint = position.relativePoint or point
+    local x0, y0 = tonumber(position.x) or 0, tonumber(position.y) or 0
+    local oldX, oldY = entry.snapFromX, entry.snapFromY
+    entry.snapFromX = x0 + (lastDx or dx) / ratio
+    entry.snapFromY = y0 + (lastDy or dy) / ratio
+    local ok, x, y = pcall(ResolveSnap, entry, point, UIParent,
+                           relativePoint, x0 + dx / ratio, y0 + dy / ratio)
+    entry.snapFromX, entry.snapFromY = oldX, oldY
+    if not ok then return nil, x end
+    local left, right, bottom, top = MoverBounds(entry, {
+      point = point, relativePoint = relativePoint, x = x, y = y,
+    })
+    return { left = left, right = right, bottom = bottom, top = top,
+             dx = (x - x0) * ratio, dy = (y - y0) * ratio }
+  end
+
+  function api.Padding(id)
+    if not movers[id] then return nil end
+    return magnet.Padding(movers[id])
+  end
+
+  -- Moves the live frame by (dx, dy) without saving; api.Restore puts back
+  -- the exact placement it had.
+  function api.Place(id, dx, dy)
+    local entry = movers[id]
+    local position = entry and EntryPosition(entry)
+    if not position then return false end
+    if not entry.probeRestore then
+      local live = ReadPlacement(entry.frame)
+      entry.probeRestore = live and live.relative == UIParent and live or false
+    end
+    local ratio = EntryScale(entry)
+    return U.ApplyFramePoint(entry.frame, {
+      point = position.point,
+      relativePoint = position.relativePoint or position.point,
+      x = (tonumber(position.x) or 0) + dx / ratio,
+      y = (tonumber(position.y) or 0) + dy / ratio,
+    })
+  end
+
+  function api.Restore(id)
+    local entry = movers[id]
+    if not entry then return false end
+    local before = entry.probeRestore
+    entry.probeRestore = nil
+    if before then return U.ApplyFramePoint(entry.frame, before) end
+    return ApplyStoredPosition(entry)
+  end
+
+  -- Ids that would travel with `id` with grouping on.
+  function api.Followers(id)
+    local ids, i = {}, nil
+    if not movers[id] then return ids end
+    local list = CollectFollowers(movers[id])
+    for i = 1, table.getn(list) do table.insert(ids, list[i].entry.id) end
+    return ids
+  end
+
+  return api
 end
 
 local function ReadDragPosition(frame)
@@ -1774,6 +2096,8 @@ local function StartDrag(entry)
   -- EntryPosition rejects a point relative to anything else.
   PinToUIParent(entry)
   PinPassengers(entry)
+  -- Measured art padding is read once per anchor for this drag.
+  magnet.cache = {}
   -- With grouping off the pins above are the whole of it: every anchor is
   -- independent, and this gesture moves the one under the cursor.
   entry.followers = MoverConfig().groupTouching and CollectFollowers(entry) or {}
@@ -1876,12 +2200,14 @@ StopDrag = function(entry)
   HideAlignmentGuides()
   if not PositionChanged(before, ReadDragPosition(entry.frame)) then
     dragPlacements = nil
+    magnet.cache = nil
     ClearFollowers(entry)
     return true
   end
   -- The drop still snaps against the placements this drag read.
   local captured = CapturePosition(entry)
   dragPlacements = nil
+  magnet.cache = nil
   entry.snapFromX, entry.snapFromY = nil, nil
   FinishFollowers(entry, before)
   ClearFollowers(entry)
@@ -2641,27 +2967,24 @@ UpdateAlignmentGuides = function(entry, point, relativePoint, x, y)
     guideY = screenCenterY
   end
   local i
-  -- Any of the anchor's three lines per axis on any line of another anchor,
-  -- touching or not. Same tiers as the snap (AlignDelta): screen centre, then
-  -- same-line matches across every anchor, then cross matches.
-  local pass
-  for pass = 1, 2 do
-    for i = 1, table.getn(moverOrder) do
-      if guideX and guideY then break end
-      local other = movers[moverOrder[i]]
-      if other ~= entry and IsEntryVisible(other) and
-         not IsFollower(entry, other) then
-        local otherLeft, otherRight, otherBottom, otherTop =
-          MoverBounds(other, OtherPosition(other))
-        if otherLeft then
-          if not guideX then
-            guideX = AlignedLine(left, right, otherLeft, otherRight,
-                                 pass == 1)
-          end
-          if not guideY then
-            guideY = AlignedLine(bottom, top, otherBottom, otherTop,
-                                 pass == 1)
-          end
+  -- Any of the anchor's three lines per axis on the same line of a nearby
+  -- anchor, touching or not: the pairs and range the snap uses (AlignDelta,
+  -- magnet.Near).
+  for i = 1, table.getn(moverOrder) do
+    if guideX and guideY then break end
+    local other = movers[moverOrder[i]]
+    if other ~= entry and IsEntryVisible(other) and
+       not IsFollower(entry, other) then
+      local otherLeft, otherRight, otherBottom, otherTop =
+        MoverBounds(other, OtherPosition(other))
+      if otherLeft then
+        if not guideX and magnet.Near(bottom, top, otherBottom, otherTop,
+                                      U.UIHeight()) then
+          guideX = AlignedLine(left, right, otherLeft, otherRight)
+        end
+        if not guideY and magnet.Near(left, right, otherLeft, otherRight,
+                                      U.UIWidth()) then
+          guideY = AlignedLine(bottom, top, otherBottom, otherTop)
         end
       end
     end
@@ -3675,6 +3998,13 @@ function U.RegisterMover(id, frame, options)
     -- "BOTTOM" for a window that changes height with its content: it is then
     -- always held by its bottom edge and grows upwards. See NormaliseAnchorEdge.
     anchorEdge = options.anchorEdge,
+    -- Space kept around the anchor when the magnet joins it to another: a
+    -- number, or a function returning x, y or left, right, bottom, top
+    -- (frame units). See magnet.Padding.
+    snapPadding = options.snapPadding,
+    -- Drawn regions with their transparent margins, measured live instead.
+    -- See magnet.ArtPadding.
+    snapArt = options.snapArt,
     dragging = false,
     -- Measured drag activity; reported by U.MoverReport.
     enters = 0,

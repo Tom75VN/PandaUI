@@ -462,7 +462,11 @@ end
 local function EnsureBankBagButton(index)
   if bagButtons[index] then return bagButtons[index] end
 
-  local name = "PandaUIBankBag" .. index
+  -- The stock BankFrameItemButton_OnUpdate calls
+  -- GetInventorySlotInfo(strsub(name, 10)) on a bag button, so the name must be
+  -- a 9-character prefix + "Bag<n>" like the client's own BankFrameBag<n>
+  -- (knowledge frames.bankbag_template_name_derives_inventory_slot).
+  local name = "PandaUIBk" .. "Bag" .. index
   local ok, button = pcall(CreateFrame, "CheckButton", name, frame.bags,
                            "BankItemButtonBagTemplate")
   if not ok or not button then

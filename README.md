@@ -113,6 +113,7 @@ A unified bag and bank window with sorting, search and one-click junk selling.
 
 - **Important:** fix the minimap moving after a relog or `/reload` for some players.
 - Browse the bags and bank of your other characters on this account.
+- First-run setup wizard: pick a theme and a ready-made layout for DPS, Healer or Tank, plus a few basic options.
 
 ## Get started
 
@@ -120,7 +121,7 @@ Use `/pui` to open the settings, `/pui unlock` to arrange supported elements, `/
 
 ## Version
 
-Current release: **0.13.3**
+Current release: **0.13.4**
 
 [See what changed](CHANGELOG.md).
 

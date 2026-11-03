@@ -315,6 +315,30 @@ function pw.LinkClick(win, reagentIndex)
   if linkOk then pw.InsertChatLink(link) end
 end
 
+-- One chat line for a recipe row: the recipe link, then every reagent as
+-- "Nx link". Reagents that would pass the 255 character chat limit are dropped.
+function pw.RecipeLine(win, index)
+  local linkOk, line = pw.Call(win.kind.link, index)
+  if not linkOk or type(line) ~= "string" or line == "" then
+    line = pw.Info(win, index)
+    if type(line) ~= "string" or line == "" then return nil end
+  end
+  local countOk, count = pw.Call(win.kind.numReagents, index)
+  count = (countOk and tonumber(count)) or 0
+  local separator = ": "
+  for i = 1, count do
+    local infoOk, _, _, need = pw.Call(win.kind.reagent, index, i)
+    local reagentOk, reagentLink = pw.Call(win.kind.reagentLink, index, i)
+    if reagentOk and type(reagentLink) == "string" and reagentLink ~= "" then
+      local part = separator .. ((infoOk and tonumber(need)) or 1) .. "x " .. reagentLink
+      if string.len(line) + string.len(part) > 255 then break end
+      line = line .. part
+      separator = ", "
+    end
+  end
+  return line
+end
+
 function pw.Shown(object)
   if not object or not object.IsShown then return false end
   local ok, shown = pcall(object.IsShown, object)
@@ -881,6 +905,7 @@ function pw.OnRowClick(win, row)
     if entry.index ~= pw.Selected(win) then win.count = 1 end
     local ok, err = pw.Call(win.kind.select, entry.index)
     if not ok and err then U.Error("professions select: " .. tostring(err)) end
+    pw.InsertChatLink(pw.RecipeLine(win, entry.index))
   end
   pw.Queue(win)
 end

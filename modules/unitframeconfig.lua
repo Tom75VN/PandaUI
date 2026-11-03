@@ -169,7 +169,8 @@ end
 -- every mover whose frame actually carries a health value. These controls use
 -- the same accessors as that page, so changing either view updates all frames.
 local function BuildHealthTextControls(frame, pad, contentTop, widgets,
-                                       controls, namePrefix)
+                                       controls, namePrefix, sizeGroup)
+  controls.sizeGroup = sizeGroup
   AddCaption(frame, widgets, pad, contentTop, U.L("UF_HEALTH_TEXT_HEADER"),
              CONTENT_WIDTH)
 
@@ -314,7 +315,7 @@ local function BuildHealthTextControls(frame, pad, contentTop, widgets,
       width = HEALTH_DROPDOWN_WIDTH,
       height = 24,
       rowHeight = 20,
-      value = U.GetUnitFrameTextSize(side.kind),
+      value = U.GetUnitFrameTextSize(side.kind, sizeGroup),
       items = {
         { value = 0, text = U.L("UF_POWER_TEXT_DEFAULT") },
         { value = 6, text = "6" },
@@ -329,7 +330,7 @@ local function BuildHealthTextControls(frame, pad, contentTop, widgets,
         { value = 16, text = "16" },
       },
       onChange = function(value)
-        U.SetUnitFrameTextSize(side.kind, value)
+        U.SetUnitFrameTextSize(side.kind, value, sizeGroup)
       end,
     })
     dropdown.SetPoint("TOPLEFT", frame, "TOPLEFT", side.x, top - 38)
@@ -343,8 +344,10 @@ local function RefreshHealthTextControls(controls)
   controls.healthRight.SetValue(U.GetUnitFrameHealthTextSetting("right"))
   controls.powerLeft.SetValue(U.GetUnitFramePowerTextSetting("left"))
   controls.powerRight.SetValue(U.GetUnitFramePowerTextSetting("right"))
-  controls.healthSize.SetValue(U.GetUnitFrameTextSize("health"))
-  controls.powerSize.SetValue(U.GetUnitFrameTextSize("power"))
+  controls.healthSize.SetValue(U.GetUnitFrameTextSize("health",
+                                                      controls.sizeGroup))
+  controls.powerSize.SetValue(U.GetUnitFrameTextSize("power",
+                                                     controls.sizeGroup))
 end
 
 -- The player frame's own group, filling its columns left to right. A spec
@@ -537,7 +540,7 @@ local function BuildPanel(def, frame, contentTop, contentWidth)
   local controls = {}
 
   BuildHealthTextControls(frame, pad, contentTop, widgets, controls,
-                          def.namePrefix)
+                          def.namePrefix, def.portraitFamily)
 
   BuildGroup(frame, pad, contentTop, HEALTH_SECTION_HEIGHT, def.toggles,
              widgets, controls,
@@ -612,7 +615,7 @@ local function BuildPartyPanel(frame, contentTop, contentWidth)
   local portraitOffset = (ModernPortraits() or raidStyle) and ROW_PITCH or 0
 
   BuildHealthTextControls(frame, pad, contentTop, widgets, controls,
-                          "PandaUIPartyFrameMover")
+                          "PandaUIPartyFrameMover", "party")
   contentTop = contentTop - HEALTH_SECTION_HEIGHT
 
   local function BeginLiveEdit()
@@ -839,7 +842,7 @@ local function BuildPetPanel(frame, contentTop, contentWidth)
   local widgets = {}
   local controls = {}
   BuildHealthTextControls(frame, pad, contentTop, widgets,
-                          controls, "PandaUIPetFrameMover")
+                          controls, "PandaUIPetFrameMover", "pet")
 
   local portrait3d = U.CreateCheckbox(frame, {
     name = "PandaUIPetFrameMoverPortrait3D",
